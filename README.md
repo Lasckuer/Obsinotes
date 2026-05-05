@@ -27,15 +27,13 @@ cp .env.example .env
 ```
 
 ### 2. Настройка окружения
-Скопируйте пример файла конфигурации и заполните его:
 ```bash
-cp .env.example .env
-```
 В файле `.env` укажите:
 - `BOT_TOKEN`: Токен вашего бота от BotFather.
 - `AI_API_KEY`: Ключ API от Groq.
 - `YANDEX_TOKEN`: OAuth токен Яндекс.Диска.
 - `PROXY_URL=http://login`: IP, Port, Login, Password
+```
 
 ### 3. Установка зависимостей
 ```bash
