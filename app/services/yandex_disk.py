@@ -30,31 +30,26 @@ class YaDiskService:
         except Exception as e:
             log_llm_error(f"Ошибка инициализации папок: {e}")
 
-    async def upload_file(self, path: str, filename: str, content: bytes):
-        """Загружает файл на Яндекс.Диск, создавая папки при необходимости"""
-        full_path = f"{path}/{filename}"
+    async def upload_file(self, folder: str, filename: str, content: bytes):
+        """Загружает файл в Notes/TelegramBot/{folder}[cite: 12]"""
+        full_dir_path = f"{self.base_path}/{folder}"
+        full_file_path = f"{full_dir_path}/{filename}"
         
         try:
-            parts = path.split('/')
-            current_path = ""
-            for part in parts:
-                if not part: continue
-                current_path += f"/{part}"
-                if not await self.y.exists(current_path):
-                    await self.y.mkdir(current_path)
+            if not await self.y.exists(full_dir_path):
+                await self.y.mkdir(full_dir_path)
             
-            await self.y.upload(io.BytesIO(content), full_path, overwrite=True)
-            
+            await self.y.upload(io.BytesIO(content), full_file_path, overwrite=True)
         except Exception as e:
             log_llm_error(f"Ошибка при загрузке на Yandex.Disk: {e}")
 
-    async def get_files(self, path: str):
-        """Возвращает список имен файлов в указанной директории"""
+    async def get_files(self, folder: str):
+        """Возвращает список файлов из Notes/TelegramBot/{folder}[cite: 12]"""
+        path = f"{self.base_path}/{folder}"
         files = []
         try:
             if not await self.y.exists(path):
                 return []
-                
             async for item in self.y.listdir(path):
                 if item.type == "file":
                     files.append(item.name)
@@ -62,12 +57,12 @@ class YaDiskService:
             log_llm_error(f"Ошибка получения списка файлов: {e}")
         return files
 
-    async def download_file(self, path: str, filename: str):
-        """Скачивает файл и возвращает его содержимое в байтах"""
-        full_path = f"{path}/{filename}"
+    async def download_file(self, folder: str, filename: str):
+        """Скачивает файл из Notes/TelegramBot/{folder}[cite: 12]"""
+        path = f"{self.base_path}/{folder}/{filename}"
         try:
             out = io.BytesIO()
-            await self.y.download(full_path, out)
+            await self.y.download(path, out)
             return out.getvalue()
         except Exception as e:
             log_llm_error(f"Ошибка при скачивании файла: {e}")
