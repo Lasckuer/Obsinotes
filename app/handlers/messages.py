@@ -50,7 +50,7 @@ async def handle_photo(message: Message, state: FSMContext, bot):
     downloaded_file = await bot.download_file(file_info.file_path)
     
     filename_img = f"img_{uuid.uuid4().hex[:8]}.jpg"
-    await ya_disk.upload_file("Attachments", filename_img, downloaded_file.read())
+    await ya_disk.upload_file("Notes/TelegramBot/Attachments", filename_img, downloaded_file.read())
     
     md_content = f"![[{filename_img}]]\n"
     category = "Notes"
@@ -74,8 +74,9 @@ async def handle_photo(message: Message, state: FSMContext, bot):
         reminder_time = processed.get("reminder_time")
         if reminder_time and category == "Reminders":
             await add_reminder(message.from_user.id, corrected_text, reminder_time)
-            
-    await ya_disk.upload_file(category, md_filename, md_content.encode('utf-8'))
+
+    base_path = f"Notes/TelegramBot/{category}"
+    await ya_disk.upload_file(base_path, md_filename, md_content.encode('utf-8'))
     await add_note_log(md_filename, category, tags_str, corrected_text)
     
     await processing_msg.edit_text(f"Фото ({md_filename}) успешно сохранено в {category}.")
@@ -112,8 +113,9 @@ async def handle_text(message: Message, state: FSMContext):
     timestamp = datetime.datetime.now().strftime("%H%M%S")
     md_filename = f"{base_name}.md"
     md_content = f"---\ntags: [{tags_str}]\ndate: {datetime.datetime.now().strftime('%Y-%m-%d')}\n---\n\n{corrected_text}"
-    
-    await ya_disk.upload_file(category, md_filename, md_content.encode('utf-8'))
+
+    base_path = f"Notes/TelegramBot/{category}"
+    await ya_disk.upload_file(bash_path, category, md_filename, md_content.encode('utf-8'))
     await add_note_log(md_filename, category, tags_str, corrected_text)
     
     if reminder_time and category == "Reminders":
@@ -134,7 +136,7 @@ async def handle_document(message: Message, state: FSMContext):
     downloaded_file = await message.bot.download_file(file_info.file_path)
     content = downloaded_file.read()
     
-    await ya_disk.upload_file("Attachments", doc.file_name, content)
+    await ya_disk.upload_file("Notes/TelegramBot/Attachments", doc.file_name, content)
     
     text = ""
     if doc.file_name.endswith('.pdf'):
@@ -157,7 +159,7 @@ async def handle_document(message: Message, state: FSMContext):
             clean_name = processed.get("filename", "doc_summary")
             fname = f"{clean_name}.md" 
         
-            await ya_disk.upload_file("Notes", fname, full_text.encode('utf-8'))
+            await ya_disk.upload_file("Notes/TelegramBot/Notes", fname, full_text.encode('utf-8'))
             await add_note_log(fname, "Notes", tags, summary)
             
             await processing_msg.edit_text(f"✅ Документ изучен и сохранен в `Notes/{fname}`")
@@ -185,7 +187,7 @@ async def handle_canvas(message: Message, state: FSMContext):
     canvas_json = create_daily_canvas(notes)
     canvas_name = f"Daily_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.canvas"
     
-    await ya_disk.upload_file("Notes", canvas_name, canvas_json.encode('utf-8'))
+    await ya_disk.upload_file("Notes/TelegramBot/Notes", canvas_name, canvas_json.encode('utf-8'))
     await msg.edit_text(f"✨ Холст `{canvas_name}` успешно создан в папке Notes! Теперь он доступен в Obsidian.")
 
 @router.message(F.text == "🤖 Спросить ИИ")
