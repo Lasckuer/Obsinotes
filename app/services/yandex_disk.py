@@ -4,7 +4,6 @@ import os
 from logger import log_llm_error
 
 class YaDiskService:
-class YaDiskService:
     def __init__(self):
         self.y = yadisk.AsyncClient(token=os.getenv("YADISK_TOKEN"))
         self.base_path = "/Notes/TelegramBot"
