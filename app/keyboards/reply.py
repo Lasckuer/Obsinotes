@@ -4,7 +4,7 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📝 Отправить заметку")],
-            [KeyboardButton(text="📁 Мои файлы")]
+            [KeyboardButton(text="📁 Мои файлы"), KeyboardButton(text="🔍 Найти / Теги")]
         ],
         resize_keyboard=True
     )

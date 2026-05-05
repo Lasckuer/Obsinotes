@@ -4,31 +4,39 @@ import json
 import os
 import datetime
 import asyncio
-from logger import logger
+import re
+from logger import log_llm_retry, log_llm_error
 
 proxy_url = os.getenv("PROXY_URL")
-
 http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
 
 client = AsyncOpenAI(
-    api_key=os.getenv("GEMINI_API_KEY"),
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    api_key=os.getenv("AI_API_KEY"),
+    base_url="https://api.groq.com/openai/v1",
     http_client=http_client
 )
 
-async def process_text(text: str, delay_callback=None) -> dict:
+async def process_text(text: str, delay_callback=None, url_content: str = "") -> dict:
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    prompt = f"""
-    Текущая системная дата и время: {now_str}. 
-    Ориентируйся на это время при расчете напоминаний!
     
-    Analyze the following text: "{text}".
-    Return ONLY a JSON object with the following keys:
-    "category": exactly one of ["Ideas", "Reminders", "Notes"]
-    "corrected_text": the input text corrected for grammar, punctuation, and presentation
-    "tags": a list of relevant strings for Obsidian tags
-    "reminder_time": in "YYYY-MM-DD HH:MM:SS" format ONLY if it is a reminder (calculate based on current time), otherwise null
-    "filename": a short, meaningful file name describing the content, in lowercase latin letters, using underscores (e.g., "game_download", "shop_idea")
+    prompt = f"""
+    Current date and time: {now_str}.
+    
+    User Input: "{text}"
+    Website Content (if applicable): "{url_content}"
+    
+    Analyze the input and return ONLY a JSON object.
+    Rules:
+    - "category": Choose one of ["Ideas", "Reminders", "Notes", "Links", "Workouts", "Finance"].
+      * If URL Content is provided, categorize as "Links" and make "corrected_text" a Markdown card with Title, URL, and a brief summary.
+      * If workout (e.g., deadlift, snowboarding), categorize as "Workouts" and format "corrected_text" as a Markdown table.
+      * If it's an expense/income, categorize as "Finance".
+    - "corrected_text": The formatted content for Obsidian.
+    - "tags": Array of relevant hashtags without the # symbol.
+    - "reminder_time": "YYYY-MM-DD HH:MM:SS" if it's a reminder, else null.
+    - "filename": Short latin filename with underscores.
+    - "expense_amount": Float number if category is Finance, else null.
+    - "expense_comment": String explaining what was bought if Finance, else null.
     """
     
     max_retries = 3
@@ -36,28 +44,38 @@ async def process_text(text: str, delay_callback=None) -> dict:
     for attempt in range(max_retries):
         try:
             response = await client.chat.completions.create(
-                model="gemini-2.5-flash",
+                model="llama-3.1-8b-instant", # Актуальная модель Groq
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
             )
-            return json.loads(response.choices[0].message.content)
             
+            content = response.choices[0].message.content
+            if content:
+                return json.loads(content)
+                
         except Exception as e:
             error_msg = str(e)
             if ("503" in error_msg or "429" in error_msg) and attempt < max_retries - 1:
-                wait_time = 3 ** attempt 
-                logger.warning(f"Лимит Gemini. Попытка {attempt + 1}/{max_retries}. Ждем {wait_time} сек...")
+                wait_time = 15 if attempt == 0 else 45 
+                log_llm_retry(attempt + 1, max_retries, wait_time)
                 
                 if delay_callback and attempt == 1:
                     await delay_callback()
-                    
                 await asyncio.sleep(wait_time)
             else:
-                logger.error(f"Ошибка при запросе к Gemini: {e}")
-                return {
-                    "category": "Notes",
-                    "corrected_text": text,
-                    "tags": ["#raw_note", "#ai_error"],
-                    "reminder_time": None,
-                    "filename": "raw_note"
-                }
+                log_llm_error(e)
+                break 
+    
+    safe_name = re.sub(r'[^\w\s]', '', text[:30]).strip().replace(' ', '_').lower()
+    if not safe_name:
+        safe_name = "note"
+        
+    return {
+        "category": "Notes",
+        "corrected_text": text + (f"\n\nURL Content: {url_content}" if url_content else ""),
+        "tags": ["raw_note", "ai_error"],
+        "reminder_time": None,
+        "filename": safe_name,
+        "expense_amount": None,
+        "expense_comment": None
+    }

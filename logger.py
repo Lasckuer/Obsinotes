@@ -72,3 +72,9 @@ def log_reminder_error(r_id, error):
 
 def log_user_start(user_id):
     logger.info(f"Пользователь {user_id} запустил бота")
+
+def log_llm_retry(attempt, max_retries, wait_time):
+    logger.warning(f"Лимит ИИ. Попытка {attempt}/{max_retries}. Ждем {wait_time} сек...")
+
+def log_llm_error(error):
+    logger.error(f"Ошибка при запросе к ИИ: {error}")

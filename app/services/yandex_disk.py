@@ -6,7 +6,7 @@ class YaDiskService:
     def __init__(self):
         self.y = yadisk.AsyncClient(token=os.getenv("YADISK_TOKEN"))
         self.base_path = "/Obsidian"
-        self.folders = ["Ideas", "Reminders", "Notes", "Attachments"]
+        self.folders = ["Ideas", "Reminders", "Notes", "Attachments", "Links", "Workouts", "Finance"]
 
     async def init_folders(self):
         if not await self.y.check_token():
