@@ -186,8 +186,10 @@ async def handle_canvas(message: Message, state: FSMContext):
     
     canvas_json = create_daily_canvas(notes)
     canvas_name = f"Daily_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.canvas"
+
     
-    await ya_disk.upload_file("Notes/TelegramBot/Notes", canvas_name, canvas_json.encode('utf-8'))
+    canvas_path = "Notes/TelegramBot/Notes"
+    await ya_disk.upload_file(canvas_path, canvas_name, canvas_json.encode('utf-8'))
     await msg.edit_text(f"✨ Холст `{canvas_name}` успешно создан в папке Notes! Теперь он доступен в Obsidian.")
 
 @router.message(F.text == "🤖 Спросить ИИ")
