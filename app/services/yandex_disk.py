@@ -6,7 +6,7 @@ from logger import log_llm_error
 class YaDiskService:
     def __init__(self):
         self.y = yadisk.AsyncClient(token=os.getenv("YADISK_TOKEN"))
-        self.base_path = "/Obsidian"
+        self.base_path = "/Notes/TelegramBot/"
         self.folders = ["Ideas", "Reminders", "Notes", "Attachments", "Links", "Workouts", "Finance"]
 
     async def init_folders(self):
