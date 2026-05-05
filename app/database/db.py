@@ -88,3 +88,16 @@ async def get_today_notes():
     async with aiosqlite.connect("database.db") as db:
         async with db.execute("SELECT filename, category FROM notes_log WHERE date LIKE ?", (f"{today}%",)) as cursor:
             return await cursor.fetchall()
+        
+async def get_recent_context(limit: int = 10):
+    """Получает последние записи для контекста ИИ"""
+    async with aiosqlite.connect("database.db") as db:
+        async with db.execute(
+            "SELECT category, content, date FROM notes_log ORDER BY date DESC LIMIT ?", 
+            (limit,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            context = ""
+            for cat, cont, date in rows:
+                context += f"[{date}] Категория: {cat}\nКонтент: {cont}\n---\n"
+            return context
