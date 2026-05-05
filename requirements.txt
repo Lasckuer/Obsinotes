@@ -1,0 +1,8 @@
+aiogram
+yadisk
+openai
+aiosqlite
+apscheduler
+python-dotenv
+aiohttp-socks
+httpx[socks]
