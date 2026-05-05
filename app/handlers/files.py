@@ -29,10 +29,12 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
 
 async def show_files_page(event: Message | CallbackQuery, state: FSMContext, category: str, page: int):
     full_path = f"Notes/TelegramBot/{category}"
+
+    if not await ya_disk.y.exists(full_path):
+        await ya_disk.y.mkdir(full_path)
+        return await event.answer(f"В папке {category} пока нет заметок.")
+
     files = await ya_disk.get_files(full_path)
-    if not files:
-        text = f"Папка {category} пуста."
-        return await (event.answer(text) if isinstance(event, Message) else event.message.edit_text(text))
 
     items_per_page = 10
     total_pages = (len(files) + items_per_page - 1) // items_per_page
