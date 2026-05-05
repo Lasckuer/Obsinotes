@@ -28,7 +28,8 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 async def show_files_page(event: Message | CallbackQuery, state: FSMContext, category: str, page: int):
-    files = await ya_disk.get_files(category)
+    full_path = f"Notes/TelegramBot/{category}"
+    files = await ya_disk.get_files(full_path)
     if not files:
         text = f"Папка {category} пуста."
         return await (event.answer(text) if isinstance(event, Message) else event.message.edit_text(text))
