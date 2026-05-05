@@ -20,9 +20,15 @@ class YaDiskService:
             if not await self.y.exists(path):
                 await self.y.mkdir(path)
 
-    async def upload_file(self, folder: str, filename: str, content: bytes):
-        path = f"{self.base_path}/{folder}/{filename}"
-        await self.y.upload(io.BytesIO(content), path, overwrite=True)
+    async def upload_file(self, path: str, filename: str, content: bytes):
+    full_path = f"{path}/{filename}"
+    try:
+        if not await self.y.exists(path):
+            await self.y.mkdir(path)
+        
+        await self.y.upload(io.BytesIO(content), full_path, overwrite=True)
+    except Exception as e:
+        log_llm_error(f"Ошибка загрузки на Диск: {e}")
 
     async def get_files(self, folder: str):
         path = f"{self.base_path}/{folder}"
