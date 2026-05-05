@@ -6,20 +6,26 @@ from logger import log_llm_error
 class YaDiskService:
     def __init__(self):
         self.y = yadisk.AsyncClient(token=os.getenv("YADISK_TOKEN"))
-        self.base_path = "/Notes/TelegramBot/"
+        self.base_path = "Notes/TelegramBot/"
         self.folders = ["Ideas", "Reminders", "Notes", "Attachments", "Links", "Workouts", "Finance"]
 
-    async def init_folders(self):
-        if not await self.y.check_token():
-            raise ValueError("Invalid Yandex Disk Token")
-        
-        if not await self.y.exists(self.base_path):
-            await self.y.mkdir(self.base_path)
-
-        for folder in self.folders:
-            path = f"{self.base_path}/{folder}"
-            if not await self.y.exists(path):
-                await self.y.mkdir(path)
+async def init_folders(self):
+    """Инициализирует структуру папок Notes/TelegramBot/ при запуске"""
+    base_path = "Notes/TelegramBot"
+    categories = ["Notes", "Workouts", "Attachments", "Ideas", "Links", "Reminders", "Finance"]
+    
+    path_parts = base_path.split('/')
+    current_path = ""
+    for part in path_parts:
+        if not part: continue
+        current_path += f"/{part}"
+        if not await self.y.exists(current_path):
+            await self.y.mkdir(current_path)
+            
+    for cat in categories:
+        cat_path = f"{base_path}/{cat}"
+        if not await self.y.exists(cat_path):
+            await self.y.mkdir(cat_path)
 
     async def upload_file(self, path: str, filename: str, content: bytes):
         """Загружает файл на Яндекс.Диск, создавая папки при необходимости"""
