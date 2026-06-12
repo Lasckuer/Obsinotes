@@ -6,7 +6,7 @@ def get_main_keyboard():
         keyboard=[
             [KeyboardButton(text="📝 Отправить заметку"), KeyboardButton(text="🤖 Спросить ИИ")],
             [KeyboardButton(text="📁 Мои файлы"), KeyboardButton(text="🔍 Найти / Теги")],
-            [KeyboardButton(text="🎨 Создать холст (Canvas)")]
+            [KeyboardButton(text="🎨 Создать холст (Canvas)"), KeyboardButton(text="🎓 Режим Экзаменатор")]
         ],
         resize_keyboard=True
     )

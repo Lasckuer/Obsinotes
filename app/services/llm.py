@@ -47,7 +47,7 @@ async def process_text(text: str, delay_callback=None, url_content: str = "") ->
     for attempt in range(max_retries):
         try:
             response = await client.chat.completions.create(
-                model="llama-3.1-8b-instant", # Актуальная модель Groq
+                model="llama-3.1-8b-instant",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
             )
@@ -127,3 +127,35 @@ async def summarize_document(text: str) -> dict:
     except Exception as e:
         log_llm_error(e)
         return None
+    
+client = AsyncOpenAI(
+    api_key=os.getenv("AI_API_KEY"),
+    http_client=http_client
+)
+
+async def process_examiner_text(text: str) -> dict:
+    """Генерация конспекта и флеш-карточек"""
+    prompt = f"""
+    Ты — строгий экзаменатор и составитель конспектов.
+    Тебе отправлен массив текста (или расшифровка аудио). 
+    Твоя задача — извлечь ключевые факты, даты и события. Особое внимание уделяй историческим темам (например, послевоенное устройство СССР — билеты 26, 30, 31).
+    
+    Сформируй ответ в формате JSON:
+    {{
+        "filename": "лаконичное_имя_файла_на_латинице",
+        "markdown_content": "Структурированный Markdown-конспект. Выделяй главные даты жирным (**дата**). В конце конспекта обязательно добавь раздел '## Флеш-карточки' (в формате: **В:** Вопрос? \n**О:** Ответ) для запоминания."
+    }}
+    
+    ТЕКСТ ДЛЯ АНАЛИЗА:
+    {text}
+    """
+    try:
+        response = await client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        log_llm_error(str(e))
+        return {"filename": "exam_error", "markdown_content": "Ошибка генерации."}

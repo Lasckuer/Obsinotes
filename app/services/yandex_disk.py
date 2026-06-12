@@ -8,7 +8,7 @@ class YaDiskService:
         self.y = yadisk.AsyncClient(token=os.getenv("YADISK_TOKEN"))
         self.base_path = "/Notes/TelegramBot"
         self.folders = ["Notes", "Workouts", "Attachments", "Ideas", "Links", "Reminders", "Finance"]
-
+        
     async def init_folders(self):
         """Рекурсивно создает структуру папок при запуске[cite: 8]"""
         try:

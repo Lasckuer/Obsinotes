@@ -7,8 +7,10 @@ from app.services.yandex_disk import YaDiskService
 from app.services.scraper import fetch_url_content
 from app.database.db import add_reminder, add_expense, add_note_log, get_recent_context
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard
-from docx import Document as DocxReader
+from docx import Document
 from aiogram.fsm.state import State, StatesGroup
+from app.services.llm import process_examiner_text
+import os
 import datetime
 import uuid
 import re
@@ -24,6 +26,9 @@ class NoteState(StatesGroup):
     
 class BotState(StatesGroup):
     waiting_for_question = State()
+    
+class ExaminerState(StatesGroup):
+    waiting_for_input = State()
 
 @router.message(F.text == "🔙 В главное меню")
 async def cmd_back(message: Message, state: FSMContext):
@@ -200,3 +205,25 @@ async def ask_ai_handler(message: Message, state: FSMContext):
     answer = await answer_question(message.text, context)
     await message.answer(answer, reply_markup=get_main_keyboard())
     await state.clear()
+
+@router.message(F.text == "🎓 Режим Экзаменатор")
+async def prompt_examiner(message: Message, state: FSMContext):
+    await message.answer(
+        "Отправь массив текста для создания конспекта и флеш-карточек:", 
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(ExaminerState.waiting_for_input)
+
+@router.message(ExaminerState.waiting_for_input, F.text)
+async def handle_examiner_text(message: Message, state: FSMContext):
+    processing_msg = await message.answer("🧠 Генерирую конспект и карточки...")
+    
+    result = await process_examiner_text(message.text)
+    md_content = result.get("markdown_content", message.text)
+    filename = f"{result.get('filename', 'exam_notes')}.md"
+    
+    await ya_disk.upload_file("Notes", filename, md_content.encode('utf-8')) 
+    
+    await processing_msg.edit_text(f"✅ Конспект сохранен в Obsidian (файл {filename})")
+    await state.clear()
+    await message.answer("Вы вернулись в главное меню.", reply_markup=get_main_keyboard())
