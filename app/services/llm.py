@@ -11,9 +11,8 @@ proxy_url = os.getenv("PROXY_URL")
 http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
 
 client = AsyncOpenAI(
-    api_key=os.getenv("AI_API_KEY"),
-    base_url="https://api.groq.com/openai/v1",
-    http_client=http_client
+    api_key="ollama",
+    base_url="https://ollama/v1",
 )
 
 async def process_text(text: str, delay_callback=None, url_content: str = "") -> dict:
@@ -47,7 +46,7 @@ async def process_text(text: str, delay_callback=None, url_content: str = "") ->
     for attempt in range(max_retries):
         try:
             response = await client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model="llama3.1:8b",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
             )
@@ -97,7 +96,7 @@ async def answer_question(question: str, context: str) -> str:
     """
     try:
         response = await client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="llama3.1:8b",
             messages=[{"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
@@ -119,7 +118,7 @@ async def summarize_document(text: str) -> dict:
     """
     try:
         response = await client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="llama3.1:8b",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
         )
@@ -165,7 +164,7 @@ async def process_examiner_text(text: str) -> dict:
     """
     try:
         response = await client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="llama3.1:8b",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             temperature=0.3,
