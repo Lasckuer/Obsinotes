@@ -127,23 +127,37 @@ async def summarize_document(text: str) -> dict:
     except Exception as e:
         log_llm_error(e)
         return None
-    
-client = AsyncOpenAI(
-    api_key=os.getenv("AI_API_KEY"),
-    http_client=http_client
-)
+
+async def transcribe_audio(file_path: str) -> str:
+    try:
+        with open(file_path, "rb") as audio_file:
+            response = await client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio_file
+            )
+            return response.text
+    except Exception as e:
+        log_llm_error(e)
+        return ""
 
 async def process_examiner_text(text: str) -> dict:
-    """Генерация конспекта и флеш-карточек"""
+    max_text_length = 10000 
+    if len(text) > max_text_length:
+        text = text[:max_text_length] + "\n\n... [ЧАСТЬ ТЕКСТА ОБРЕЗАНА ИЗ-ЗА ЛИМИТОВ API GROQ]"
+
     prompt = f"""
-    Ты — строгий экзаменатор и составитель конспектов.
-    Тебе отправлен массив текста (или расшифровка аудио). 
-    Твоя задача — извлечь ключевые факты, даты и события. Особое внимание уделяй историческим темам (например, послевоенное устройство СССР — билеты 26, 30, 31).
+    Ты — строгий экзаменатор. Тебе отправлен текст. Твоя задача — извлечь факты и даты (особенно по истории).
+    Будь ОЧЕНЬ лаконичным, пиши только самое главное. Не лей воду, иначе ответ не поместится в лимиты.
+    Сделай максимум 5-7 самых важных флеш-карточек.
     
-    Сформируй ответ в формате JSON:
+    ВАЖНОЕ ПРАВИЛО: Твой ответ должен быть ТОЛЬКО сырым JSON объектом, без оберток ```json ... ```. 
+    Все переносы строк внутри поля markdown_content должны быть строго экранированы как \\n.
+    Любые кавычки внутри текста должны быть экранированы как \\".
+    
+    Сформируй ответ строго по этому шаблону:
     {{
         "filename": "лаконичное_имя_файла_на_латинице",
-        "markdown_content": "Структурированный Markdown-конспект. Выделяй главные даты жирным (**дата**). В конце конспекта обязательно добавь раздел '## Флеш-карточки' (в формате: **В:** Вопрос? \n**О:** Ответ) для запоминания."
+        "markdown_content": "Структурированный Markdown-конспект.\\n\\nВыделяй главные даты жирным (**дата**).\\n\\n## Флеш-карточки\\n**В:** Вопрос?\\n**О:** Ответ"
     }}
     
     ТЕКСТ ДЛЯ АНАЛИЗА:
@@ -153,9 +167,19 @@ async def process_examiner_text(text: str) -> dict:
         response = await client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            temperature=0.3,
+            max_tokens=2500
         )
-        return json.loads(response.choices[0].message.content)
+        
+        raw_content = response.choices[0].message.content.strip()
+        if raw_content.startswith("```json"):
+            raw_content = raw_content[7:]
+        if raw_content.endswith("```"):
+            raw_content = raw_content[:-3]
+            
+        return json.loads(raw_content.strip())
+        
     except Exception as e:
-        log_llm_error(str(e))
-        return {"filename": "exam_error", "markdown_content": "Ошибка генерации."}
+        log_llm_error(f"Ошибка парсинга JSON Экзаменатора: {e}")
+        return None

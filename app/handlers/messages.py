@@ -9,7 +9,7 @@ from app.database.db import add_reminder, add_expense, add_note_log, get_recent_
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard
 from docx import Document
 from aiogram.fsm.state import State, StatesGroup
-from app.services.llm import process_examiner_text
+from app.services.llm import process_examiner_text, transcribe_audio
 import os
 import datetime
 import uuid
@@ -26,9 +26,6 @@ class NoteState(StatesGroup):
     
 class BotState(StatesGroup):
     waiting_for_question = State()
-    
-class ExaminerState(StatesGroup):
-    waiting_for_input = State()
 
 @router.message(F.text == "🔙 В главное меню")
 async def cmd_back(message: Message, state: FSMContext):
@@ -37,7 +34,7 @@ async def cmd_back(message: Message, state: FSMContext):
 
 @router.message(F.text == "📝 Отправить заметку")
 async def prompt_note(message: Message, state: FSMContext):
-    await message.answer("Напиши текст, скинь ссылку или фото:", reply_markup=get_cancel_keyboard())
+    await message.answer("Напиши текст, скинь ссылку, документ .docx, голосовое сообщение или фото:", reply_markup=get_cancel_keyboard())
     await state.set_state(NoteState.waiting_for_text)
 
 @router.message(NoteState.waiting_for_text, F.photo)
@@ -87,46 +84,88 @@ async def handle_photo(message: Message, state: FSMContext, bot):
     await state.clear()
     await message.answer("Вы в главном меню.", reply_markup=get_main_keyboard())
 
+@router.message(NoteState.waiting_for_text, F.voice | F.audio)
+async def handle_audio(message: Message, state: FSMContext, bot):
+    processing_msg = await message.answer("🎧 Распознаю аудио...")
+    file_id = message.voice.file_id if message.voice else message.audio.file_id
+    file_info = await bot.get_file(file_id)
+    downloaded_file = await bot.download_file(file_info.file_path)
+    
+    temp_filename = f"temp_{uuid.uuid4().hex[:8]}.ogg"
+    with open(temp_filename, "wb") as f:
+        f.write(downloaded_file.read())
+        
+    text = await transcribe_audio(temp_filename)
+    os.remove(temp_filename)
+    
+    if not text:
+        await processing_msg.edit_text("Не удалось распознать аудио.")
+        return
+        
+    await process_note_text(message, state, text, processing_msg)
+    
+@router.message(NoteState.waiting_for_text, F.document)
+async def handle_document(message: Message, state: FSMContext, bot):
+    processing_msg = await message.answer("📄 Читаю документ...")
+    if not message.document.file_name.endswith('.docx'):
+        await processing_msg.edit_text("Пожалуйста, отправьте файл формата .docx")
+        return
+        
+    file_info = await bot.get_file(message.document.file_id)
+    downloaded_file = await bot.download_file(file_info.file_path)
+    
+    doc = Document(io.BytesIO(downloaded_file.read()))
+    text = "\n".join([para.text for para in doc.paragraphs])
+    
+    await process_note_text(message, state, text, processing_msg)
+
 @router.message(NoteState.waiting_for_text, F.text)
 async def handle_text(message: Message, state: FSMContext):
-    processing_msg = await message.answer("Анализирую...")
-    
-    async def on_delay():
-        try:
-            await processing_msg.edit_text("⚠️ Извините за задержку, пробую достучаться еще раз...")
-        except Exception:
-            pass
+    processing_msg = await message.answer("🧠 Анализирую текст...")
+    await process_note_text(message, state, message.text, processing_msg)
 
-    url_content = ""
-    url_match = re.search(r'(https?://\S+)', message.text)
-    if url_match:
-        url_content = await fetch_url_content(url_match.group(1))
-
-    processed = await process_text(message.text, delay_callback=on_delay, url_content=url_content)
-    
-    category = processed.get("category", "Notes")
-    corrected_text = processed.get("corrected_text", message.text)
-    tags_list = processed.get("tags", [])
-    tags_str = ", ".join(tags_list)
-    reminder_time = processed.get("reminder_time")
-    
-    if category == "Finance" and processed.get("expense_amount"):
-        await add_expense(message.from_user.id, float(processed["expense_amount"]), processed.get("expense_comment", ""))
-    
-    base_name = processed.get("filename", "note")
-    timestamp = datetime.datetime.now().strftime("%H%M%S")
-    md_filename = f"{base_name}.md"
-    md_content = f"---\ntags: [{tags_str}]\ndate: {datetime.datetime.now().strftime('%Y-%m-%d')}\n---\n\n{corrected_text}"
-
-    await ya_disk.upload_file(category, md_filename, md_content.encode('utf-8'))
-    await add_note_log(md_filename, category, tags_str, corrected_text)
-    
-    if reminder_time and category == "Reminders":
-        await add_reminder(message.from_user.id, corrected_text, reminder_time)
-        await processing_msg.edit_text(f"Напоминание на {reminder_time}. Файл: `{md_filename}`", parse_mode="Markdown")
-    else:
-        await processing_msg.edit_text(f"Сохранено в {category}: `{md_filename}`", parse_mode="Markdown")
+async def process_note_text(message: Message, state: FSMContext, text: str, processing_msg: Message):
+    if len(text) > 1000:
+        result = await process_examiner_text(text)
         
+        if not result:
+            await processing_msg.edit_text("❌ Ошибка при генерации конспекта. Проверь логи (скорее всего, проблема с API или ключом).")
+            await state.clear()
+            return
+            
+        md_content = result.get("markdown_content", text)
+        filename = f"{result.get('filename', 'exam_notes')}.md"
+        category = "Notes"
+        
+        await ya_disk.upload_file(category, filename, md_content.encode('utf-8'))
+        await add_note_log(filename, category, "exam, notes", md_content)
+        await processing_msg.edit_text(f"Сохранен конспект: `{filename}`", parse_mode="Markdown")
+    else:
+        processed = await process_text(text)
+        
+        if not processed:
+            await processing_msg.edit_text("❌ Ошибка при обработке заметки.")
+            await state.clear()
+            return
+            
+        category = processed.get("category", "Notes")
+        tags = processed.get("tags", [])
+        tags_str = ", ".join(tags)
+        corrected_text = processed.get("corrected_text", text)
+        base_name = processed.get("filename", f"note_{uuid.uuid4().hex[:4]}")
+        md_filename = f"{base_name}.md"
+        reminder_time = processed.get("reminder_time")
+        
+        md_content = f"---\ntags: [{tags_str}]\ndate: {datetime.datetime.now().strftime('%Y-%m-%d')}\n---\n\n{corrected_text}"
+        await ya_disk.upload_file(category, md_filename, md_content.encode('utf-8'))
+        await add_note_log(md_filename, category, tags_str, corrected_text)
+        
+        if reminder_time and category == "Reminders":
+            await add_reminder(message.from_user.id, corrected_text, reminder_time)
+            await processing_msg.edit_text(f"Напоминание на {reminder_time}. Файл: `{md_filename}`", parse_mode="Markdown")
+        else:
+            await processing_msg.edit_text(f"Сохранено в {category}: `{md_filename}`", parse_mode="Markdown")
+            
     await state.clear()
     await message.answer("Готово.", reply_markup=get_main_keyboard())
     
@@ -205,25 +244,3 @@ async def ask_ai_handler(message: Message, state: FSMContext):
     answer = await answer_question(message.text, context)
     await message.answer(answer, reply_markup=get_main_keyboard())
     await state.clear()
-
-@router.message(F.text == "🎓 Режим Экзаменатор")
-async def prompt_examiner(message: Message, state: FSMContext):
-    await message.answer(
-        "Отправь массив текста для создания конспекта и флеш-карточек:", 
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(ExaminerState.waiting_for_input)
-
-@router.message(ExaminerState.waiting_for_input, F.text)
-async def handle_examiner_text(message: Message, state: FSMContext):
-    processing_msg = await message.answer("🧠 Генерирую конспект и карточки...")
-    
-    result = await process_examiner_text(message.text)
-    md_content = result.get("markdown_content", message.text)
-    filename = f"{result.get('filename', 'exam_notes')}.md"
-    
-    await ya_disk.upload_file("Notes", filename, md_content.encode('utf-8')) 
-    
-    await processing_msg.edit_text(f"✅ Конспект сохранен в Obsidian (файл {filename})")
-    await state.clear()
-    await message.answer("Вы вернулись в главное меню.", reply_markup=get_main_keyboard())
