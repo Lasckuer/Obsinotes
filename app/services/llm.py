@@ -12,7 +12,7 @@ http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
 
 client = AsyncOpenAI(
     api_key="ollama",
-    base_url="http://ollama-api:11434/v1",
+    base_url="https://api-ai.lkserv.ru/v1",
     http_client=httpx.AsyncClient()
 )
 
