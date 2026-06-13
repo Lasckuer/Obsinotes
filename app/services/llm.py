@@ -47,7 +47,7 @@ async def process_text(text: str, delay_callback=None, url_content: str = "") ->
     for attempt in range(max_retries):
         try:
             response = await client.chat.completions.create(
-                model="llama3.1:8b",
+                model="gemma3:4b",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
             )
@@ -97,7 +97,7 @@ async def answer_question(question: str, context: str) -> str:
     """
     try:
         response = await client.chat.completions.create(
-            model="llama3.1:8b",
+            model="gemma3:4b",
             messages=[{"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
@@ -119,7 +119,7 @@ async def summarize_document(text: str) -> dict:
     """
     try:
         response = await client.chat.completions.create(
-            model="llama3.1:8b",
+            model="gemma3:4b",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
         )
@@ -165,7 +165,7 @@ async def process_examiner_text(text: str) -> dict:
     """
     try:
         response = await client.chat.completions.create(
-            model="llama3.1:8b",
+            model="gemma3:4b",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             temperature=0.3,
