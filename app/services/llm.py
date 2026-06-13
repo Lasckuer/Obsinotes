@@ -13,6 +13,7 @@ http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
 client = AsyncOpenAI(
     api_key="ollama",
     base_url="http://api-ai.lkserv.ru/v1",
+    http_client=httpx.AsyncClient()
 )
 
 async def process_text(text: str, delay_callback=None, url_content: str = "") -> dict:
