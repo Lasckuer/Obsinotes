@@ -16,6 +16,7 @@ import uuid
 import re
 import fitz
 import io
+import aiosqlite
 
 
 router = Router()
@@ -23,9 +24,6 @@ ya_disk = YaDiskService()
 
 class NoteState(StatesGroup):
     waiting_for_text = State()
-    
-class BotState(StatesGroup):
-    waiting_for_question = State()
 
 @router.message(F.text == "🔙 В главное меню")
 async def cmd_back(message: Message, state: FSMContext):
@@ -232,15 +230,49 @@ async def handle_canvas(message: Message, state: FSMContext):
     
     await ya_disk.upload_file("Notes", canvas_name, canvas_json.encode('utf-8'))
     await msg.edit_text(f"✨ Холст `{canvas_name}` успешно создан в папке Notes! Теперь он доступен в Obsidian.")
+    
+@router.message(F.text == "/sync")
+async def sync_all_obsidian(message: Message):
+    msg = await message.answer("🔄 Начинаю полное сканирование всего Яндекс.Диска (Obsidian Vault)...\nЭто может занять несколько минут, в зависимости от количества заметок.")
+    added_count = 0
+    updated_count = 0
+    
+    async with aiosqlite.connect("database.db") as db:
+        async def scan_directory(path: str):
+            nonlocal added_count, updated_count
+            try:
+                async for item in ya_disk.y.listdir(path):
+                    if item.type == "dir":
+                        if not item.name.startswith("."):
+                            await scan_directory(item.path)
+                    elif item.type == "file" and (item.name.endswith(".md") or item.name.endswith(".txt")):
+                        try:
+                            buffer = io.BytesIO()
+                            await ya_disk.y.download(item.path, buffer)
+                            text_content = buffer.getvalue().decode('utf-8', errors='ignore')
+                            
+                            async with db.execute("SELECT id, content FROM notes_log WHERE filename = ?", (item.name,)) as cursor:
+                                exists = await cursor.fetchone()
+                            
+                            if not exists:
+                                await db.execute(
+                                    "INSERT INTO notes_log (filename, category, tags, content, date) VALUES (?, ?, ?, ?, ?)",
+                                    (item.name, "Notes", "", text_content, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                                )
+                                added_count += 1
+                            else:
+                                if exists[1] != text_content:
+                                    await db.execute(
+                                        "UPDATE notes_log SET content = ? WHERE id = ?",
+                                        (text_content, exists[0])
+                                    )
+                                    updated_count += 1
+                        except Exception as e:
+                            print(f"Ошибка чтения {item.name}: {e}")
+            except Exception as e:
+                print(f"Ошибка доступа к папке {path}: {e}")
 
-@router.message(F.text == "🤖 Спросить ИИ")
-async def ask_ai_start(message: Message, state: FSMContext):
-    await message.answer("Задай вопрос по своим заметкам (например: 'Когда была последняя тренировка?'):", reply_markup=get_cancel_keyboard())
-    await state.set_state(BotState.waiting_for_question)
-
-@router.message(BotState.waiting_for_question)
-async def ask_ai_handler(message: Message, state: FSMContext):
-    context = await get_recent_context(20)
-    answer = await answer_question(message.text, context)
-    await message.answer(answer, reply_markup=get_main_keyboard())
-    await state.clear()
+        await scan_directory("/")
+        await db.commit()
+        
+    await msg.edit_text(f"✅ Глубокая синхронизация всего Яндекс.Диска завершена!\n\nДобавлено новых заметок: **{added_count}**\nОбновлено старых: **{updated_count}**\n\nТеперь поиск и ИИ видят абсолютно все твои записи Obsidian из любых папок!", parse_mode="Markdown")

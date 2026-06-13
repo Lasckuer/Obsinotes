@@ -4,18 +4,15 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 def get_main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📝 Отправить заметку"), KeyboardButton(text="🤖 Спросить ИИ")],
-            [KeyboardButton(text="📁 Мои файлы"), KeyboardButton(text="🔍 Найти / Теги")],
-            [KeyboardButton(text="🎨 Создать холст (Canvas)")]
+            [KeyboardButton(text="📝 Отправить заметку"), KeyboardButton(text="🔍 Поиск / 🤖 ИИ")],
+            [KeyboardButton(text="📁 Мои файлы"), KeyboardButton(text="🎨 Создать холст (Canvas)")]
         ],
         resize_keyboard=True
     )
 
 def get_cancel_keyboard():
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🔙 В главное меню")]
-        ],
+        keyboard=[[KeyboardButton(text="🔙 В главное меню")]],
         resize_keyboard=True
     )
 
