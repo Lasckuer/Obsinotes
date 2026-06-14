@@ -3,7 +3,7 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from app.services.llm import process_text, answer_question, summarize_document
-from app.services.yandex_disk import YaDiskService
+from app.services.s3_storage import S3StorageService
 from app.services.scraper import fetch_url_content
 from app.database.db import add_reminder, add_expense, add_note_log, get_recent_context
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard
@@ -20,7 +20,7 @@ import aiosqlite
 
 
 router = Router()
-ya_disk = YaDiskService()
+storage = S3StorageService()
 
 class NoteState(StatesGroup):
     waiting_for_text = State()
@@ -50,7 +50,7 @@ async def handle_photo(message: Message, state: FSMContext, bot):
     downloaded_file = await bot.download_file(file_info.file_path)
     
     filename_img = f"img_{uuid.uuid4().hex[:8]}.jpg"
-    await ya_disk.upload_file("Attachments", filename_img, downloaded_file.read())
+    await storage.upload_file("Attachments", filename_img, downloaded_file.read())
     
     md_content = f"![[{filename_img}]]\n"
     category = "Notes"
@@ -75,7 +75,7 @@ async def handle_photo(message: Message, state: FSMContext, bot):
         if reminder_time and category == "Reminders":
             await add_reminder(message.from_user.id, corrected_text, reminder_time)
 
-    await ya_disk.upload_file(category, md_filename, md_content.encode('utf-8'))
+    await storage.upload_file(category, md_filename, md_content.encode('utf-8'))
     await add_note_log(md_filename, category, tags_str, corrected_text)
     
     await processing_msg.edit_text(f"Фото ({md_filename}) успешно сохранено в {category}.")
@@ -135,7 +135,7 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
         filename = f"{result.get('filename', 'exam_notes')}.md"
         category = "Notes"
         
-        await ya_disk.upload_file(category, filename, md_content.encode('utf-8'))
+        await storage.upload_file(category, filename, md_content.encode('utf-8'))
         await add_note_log(filename, category, "exam, notes", md_content)
         await processing_msg.edit_text(f"Сохранен конспект: `{filename}`", parse_mode="Markdown")
     else:
@@ -155,7 +155,7 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
         reminder_time = processed.get("reminder_time")
         
         md_content = f"---\ntags: [{tags_str}]\ndate: {datetime.datetime.now().strftime('%Y-%m-%d')}\n---\n\n{corrected_text}"
-        await ya_disk.upload_file(category, md_filename, md_content.encode('utf-8'))
+        await storage.upload_file(category, md_filename, md_content.encode('utf-8'))
         await add_note_log(md_filename, category, tags_str, corrected_text)
         
         if reminder_time and category == "Reminders":
@@ -176,7 +176,7 @@ async def handle_document(message: Message, state: FSMContext):
     downloaded_file = await message.bot.download_file(file_info.file_path)
     content = downloaded_file.read()
     
-    await ya_disk.upload_file("Attachments", doc.file_name, content)
+    await storage.upload_file("Attachments", doc.file_name, content)
     
     text = ""
     if doc.file_name.endswith('.pdf'):
@@ -199,7 +199,7 @@ async def handle_document(message: Message, state: FSMContext):
             clean_name = processed.get("filename", "doc_summary")
             fname = f"{clean_name}.md" 
         
-            await ya_disk.upload_file("Notes", fname, full_text.encode('utf-8'))
+            await storage.upload_file("Notes", fname, full_text.encode('utf-8'))
             await add_note_log(fname, "Notes", tags, summary)
             
             await processing_msg.edit_text(f"✅ Документ изучен и сохранен в `Notes/{fname}`")
@@ -228,7 +228,7 @@ async def handle_canvas(message: Message, state: FSMContext):
     canvas_name = f"Daily_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.canvas"
 
     
-    await ya_disk.upload_file("Notes", canvas_name, canvas_json.encode('utf-8'))
+    await storage.upload_file("Notes", canvas_name, canvas_json.encode('utf-8'))
     await msg.edit_text(f"✨ Холст `{canvas_name}` успешно создан в папке Notes! Теперь он доступен в Obsidian.")
     
 @router.message(F.text == "/sync")
@@ -241,14 +241,14 @@ async def sync_all_obsidian(message: Message):
         async def scan_directory(path: str):
             nonlocal added_count, updated_count
             try:
-                async for item in ya_disk.y.listdir(path):
+                async for item in storage.y.listdir(path):
                     if item.type == "dir":
                         if not item.name.startswith("."):
                             await scan_directory(item.path)
                     elif item.type == "file" and (item.name.endswith(".md") or item.name.endswith(".txt")):
                         try:
                             buffer = io.BytesIO()
-                            await ya_disk.y.download(item.path, buffer)
+                            await storage.y.download(item.path, buffer)
                             text_content = buffer.getvalue().decode('utf-8', errors='ignore')
                             
                             async with db.execute("SELECT id, content FROM notes_log WHERE filename = ?", (item.name,)) as cursor:

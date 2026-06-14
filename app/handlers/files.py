@@ -1,13 +1,13 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
-from app.services.yandex_disk import YaDiskService
+from app.services.s3_storage import S3StorageService
 from app.keyboards.inline import get_categories_files_kb, get_pagination_inline_kb
 from app.keyboards.reply import get_back_menu_kb, get_numbers_kb, get_main_keyboard
 from aiogram.fsm.state import State, StatesGroup
 
 router = Router()
-ya_disk = YaDiskService()
+storage = S3StorageService()
 
 class FileBrowser(StatesGroup):
     choosing_category = State()
@@ -28,13 +28,14 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 async def show_files_page(event: Message | CallbackQuery, state: FSMContext, category: str, page: int):
-    full_path = f"Notes/TelegramBot/{category}"
-
-    if not await ya_disk.y.exists(full_path):
-        await ya_disk.y.mkdir(full_path)
-        return await event.answer(f"В папке {category} пока нет заметок.")
-
-    files = await ya_disk.get_files(category)
+    files = await storage.get_files(category)
+    
+    if not files:
+        if isinstance(event, Message):
+            await event.answer(f"В папке {category} пока нет заметок.")
+        else:
+            await event.message.edit_text(f"В папке {category} пока нет заметок.", reply_markup=get_back_menu_kb())
+        return
 
     items_per_page = 10
     total_pages = (len(files) + items_per_page - 1) // items_per_page
@@ -79,7 +80,7 @@ async def handle_file_selection(message: Message, state: FSMContext):
     if 0 <= idx < len(files):
         filename = files[idx]
         await message.answer(f"⏳ Скачиваю: {filename}...")
-        content = await ya_disk.download_file(category, filename)
+        content = await storage.download_file(category, filename)
         await message.answer_document(BufferedInputFile(content, filename=filename))
     else:
         await message.answer("Нет файла под таким номером.")

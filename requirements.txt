@@ -9,3 +9,4 @@ httpx[socks]
 beautifulsoup4
 pymupdf
 python-docx
+aioboto3

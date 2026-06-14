@@ -15,14 +15,14 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.database.db import init_db, get_due_reminders, delete_reminder, get_today_notes
-from app.services.yandex_disk import YaDiskService
+from app.services.s3_storage import S3StorageService
 from app.keyboards.reply import get_main_keyboard
 from app.handlers import messages, files, search
 
 from logger import (
     logger,
     log_db_init, 
-    log_yadisk_init, 
+    log_s3_init, 
     log_scheduler_start,
     log_webhook_drop, 
     log_bot_start, 
@@ -72,9 +72,9 @@ async def main():
     log_db_init()
     await init_db()
     
-    log_yadisk_init()
-    ya_disk = YaDiskService()
-    await ya_disk.init_folders()
+    log_s3_init()
+    storage = S3StorageService()
+    await storage.init_folders()
     
     log_scheduler_start()
     scheduler = AsyncIOScheduler()

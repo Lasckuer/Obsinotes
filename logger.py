@@ -49,8 +49,8 @@ logger = setup_logger()
 def log_db_init():
     logger.info("Инициализация базы данных...")
 
-def log_yadisk_init():
-    logger.info("Подключение к Яндекс.Диску...")
+def log_s3_init():
+    logger.info("Подключение к S3 (SeaweedFS)...")
 
 def log_scheduler_start():
     logger.info("Запуск планировщика задач...")
