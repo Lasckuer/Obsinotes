@@ -1,16 +1,18 @@
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from app.database.db import search_notes, get_recent_context
 from app.services.llm import answer_question
+from app.services.s3_storage import S3StorageService
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard, get_numbers_kb
-from app.handlers.files import FileBrowser
 
 router = Router()
+storage = S3StorageService()
 
 class SearchAIState(StatesGroup):
     waiting_for_input = State()
+    waiting_for_file_number = State()
 
 @router.message(F.text == "🔍 Поиск / 🤖 ИИ")
 async def prompt_search_or_ai(message: Message, state: FSMContext):
@@ -34,7 +36,13 @@ async def handle_search_or_ai(message: Message, state: FSMContext):
         processing_msg = await message.answer("🤖 Изучаю твои записи...")
         context = await get_recent_context(20)
         answer = await answer_question(query, context)
-        await processing_msg.edit_text(answer, reply_markup=get_main_keyboard())
+        
+        await processing_msg.delete()
+        
+        if not answer or not str(answer).strip():
+            answer = "❌ ИИ вернул пустой ответ. Возможно, локальная модель не запущена, перегружена или произошла ошибка генерации."
+            
+        await message.answer(answer, reply_markup=get_main_keyboard())
         await state.clear()
         
     else:
@@ -60,7 +68,33 @@ async def handle_search_or_ai(message: Message, state: FSMContext):
         
         await state.update_data(
             current_files=files_list, 
-            current_categories=categories_list, 
-            current_page=1
+            current_categories=categories_list
         )
-        await state.set_state(FileBrowser.browsing_files)
+        await state.set_state(SearchAIState.waiting_for_file_number)
+
+@router.message(SearchAIState.waiting_for_file_number, F.text.isdigit())
+async def handle_file_selection(message: Message, state: FSMContext):
+    data = await state.get_data()
+    files = data.get("current_files", [])
+    categories = data.get("current_categories", [])
+    
+    idx = int(message.text) - 1
+    if 0 <= idx < len(files):
+        filename = files[idx]
+        category = categories[idx]
+        
+        status_msg = await message.answer(f"⏳ Скачиваю: `{filename}`...")
+        content = await storage.download_file(category, filename)
+        
+        await status_msg.delete()
+        if content:
+            await message.answer_document(
+                BufferedInputFile(content, filename=filename), 
+                reply_markup=get_main_keyboard()
+            )
+            await state.clear()
+        else:
+            await message.answer("❌ Не удалось скачать файл из SeaweedFS.", reply_markup=get_main_keyboard())
+            await state.clear()
+    else:
+        await message.answer("❌ Неверный номер. Выбери число из списка выше.")

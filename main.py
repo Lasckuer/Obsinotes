@@ -22,7 +22,7 @@ from app.database.db import init_db, get_due_reminders, delete_reminder, get_tod
 from app.services.s3_storage import S3StorageService
 from app.keyboards.reply import get_main_keyboard
 
-from app.handlers import messages, files, search 
+from app.handlers import messages, search 
 
 from logger import (
     logger,
@@ -40,7 +40,6 @@ bot = Bot(token=os.getenv("BOT_TOKEN"), session=session)
 dp = Dispatcher()
 
 dp.include_router(search.router)
-dp.include_router(files.router)
 dp.include_router(messages.router)
 
 async def check_reminders():
