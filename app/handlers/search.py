@@ -39,21 +39,28 @@ async def handle_search_or_ai(message: Message, state: FSMContext):
         
     else:
         status_msg = await message.answer("🔍 Сканирую записи Obsidian... подожди немного.")
-        
         results = await search_notes(query)
         
         if not results:
-            await status_msg.edit_text("❌ По твоему запросу ничего не найдено.")
+            await status_msg.delete()
+            await message.answer("❌ По твоему запросу ничего не найдено.", reply_markup=get_main_keyboard())
             await state.clear()
             return
 
         files_list = [r[0] for r in results]
+        categories_list = [r[1] for r in results]
         
-        await message.answer(f"Найдено заметок: {len(results)}\n\nИспользуй клавиатуру с цифрами ниже для скачивания нужного файла.", reply_markup=get_main_keyboard())
-        await message.answer("Доступные файлы для загрузки:", reply_markup=get_numbers_kb(len(files_list)))
-        
-        await state.update_data(current_files=files_list, current_page=1, current_category=results[0][1])
-        await state.set_state(FileBrowser.browsing_files)
+        response_text = f"🔍 Найдено заметок: **{len(results)}**\n\n"
+        for i, (filename, category) in enumerate(results, 1):
+            response_text += f"{i}. `[{category}]` {filename}\n"
+        response_text += "\nИспользуй клавиатуру с цифрами ниже для скачивания нужного файла."
         
         await status_msg.delete()
-        await message.answer(f"Найдено заметок: {len(results)}...")
+        await message.answer(response_text, reply_markup=get_numbers_kb(len(files_list)))
+        
+        await state.update_data(
+            current_files=files_list, 
+            current_categories=categories_list, 
+            current_page=1
+        )
+        await state.set_state(FileBrowser.browsing_files)

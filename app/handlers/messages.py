@@ -1,11 +1,11 @@
 from aiogram import Router, F
 from aiogram.types import Message
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from app.services.llm import process_text, answer_question, summarize_document
+from app.services.llm import process_text, summarize_document
 from app.services.s3_storage import S3StorageService
-from app.services.scraper import fetch_url_content
-from app.database.db import add_reminder, add_expense, add_note_log, get_recent_context
+from app.database.db import add_reminder, add_note_log
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard
 from docx import Document
 from aiogram.fsm.state import State, StatesGroup
@@ -13,8 +13,6 @@ from app.services.llm import process_examiner_text, transcribe_audio
 import os
 import datetime
 import uuid
-import re
-import fitz
 import io
 import aiosqlite
 
@@ -210,69 +208,64 @@ async def handle_document(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer("Вы вернулись в главное меню.", reply_markup=get_main_keyboard())
-
-@router.message(F.text == "🎨 Создать холст (Canvas)")
-async def handle_canvas(message: Message, state: FSMContext):
-    await state.clear()
     
-    from app.database.db import get_today_notes
-    from app.services.canvas import create_daily_canvas
-    
-    notes = await get_today_notes()
-    if not notes:
-        return await message.answer("Сегодня еще нет заметок для создания холста. Сначала добавь что-нибудь!")
-    
-    msg = await message.answer("🚀 Генерирую холст со всеми заметками за сегодня...")
-    
-    canvas_json = create_daily_canvas(notes)
-    canvas_name = f"Daily_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.canvas"
-
-    
-    await storage.upload_file("Notes", canvas_name, canvas_json.encode('utf-8'))
-    await msg.edit_text(f"✨ Холст `{canvas_name}` успешно создан в папке Notes! Теперь он доступен в Obsidian.")
-    
-@router.message(F.text == "/sync")
-async def sync_all_obsidian(message: Message):
-    msg = await message.answer("🔄 Начинаю полное сканирование всего Яндекс.Диска (Obsidian Vault)...\nЭто может занять несколько минут, в зависимости от количества заметок.")
+async def run_s3_sync():
     added_count = 0
     updated_count = 0
     
     async with aiosqlite.connect("database.db") as db:
-        async def scan_directory(path: str):
-            nonlocal added_count, updated_count
+        all_keys = await storage.get_all_files()
+        for key in all_keys:
+            if not key.endswith('.md') and not key.endswith('.txt'):
+                continue
+                
+            parts = key.split('/')
+            filename = parts[-1]
+            category = "/".join(parts[:-1]) if len(parts) > 1 else ""
+            
             try:
-                async for item in storage.y.listdir(path):
-                    if item.type == "dir":
-                        if not item.name.startswith("."):
-                            await scan_directory(item.path)
-                    elif item.type == "file" and (item.name.endswith(".md") or item.name.endswith(".txt")):
-                        try:
-                            buffer = io.BytesIO()
-                            await storage.y.download(item.path, buffer)
-                            text_content = buffer.getvalue().decode('utf-8', errors='ignore')
-                            
-                            async with db.execute("SELECT id, content FROM notes_log WHERE filename = ?", (item.name,)) as cursor:
-                                exists = await cursor.fetchone()
-                            
-                            if not exists:
-                                await db.execute(
-                                    "INSERT INTO notes_log (filename, category, tags, content, date) VALUES (?, ?, ?, ?, ?)",
-                                    (item.name, "Notes", "", text_content, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                                )
-                                added_count += 1
-                            else:
-                                if exists[1] != text_content:
-                                    await db.execute(
-                                        "UPDATE notes_log SET content = ? WHERE id = ?",
-                                        (text_content, exists[0])
-                                    )
-                                    updated_count += 1
-                        except Exception as e:
-                            print(f"Ошибка чтения {item.name}: {e}")
-            except Exception as e:
-                print(f"Ошибка доступа к папке {path}: {e}")
-
-        await scan_directory("/")
+                content_bytes = await storage.download_file_by_key(key)
+                if not content_bytes:
+                    continue
+                
+                text_content = content_bytes.decode('utf-8', errors='ignore')
+                
+                async with db.execute(
+                    "SELECT id, content FROM notes_log WHERE filename = ? AND category = ?", 
+                    (filename, category)
+                ) as cursor:
+                    exists = await cursor.fetchone()
+                
+                if not exists:
+                    await db.execute(
+                        "INSERT INTO notes_log (filename, category, tags, content, date) VALUES (?, ?, ?, ?, ?)",
+                        (filename, category, "", text_content, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    )
+                    added_count += 1
+                else:
+                    if exists[1] != text_content:
+                        await db.execute(
+                            "UPDATE notes_log SET content = ? WHERE id = ?",
+                            (text_content, exists[0])
+                        )
+                        updated_count += 1
+            except Exception:
+                continue
+                
         await db.commit()
+    return added_count, updated_count
+
+@router.message(Command("sync"))
+@router.message(F.text == "🔄 Полная синхронизация S3")
+async def cmd_sync_s3(message: Message):
+    msg = await message.answer("🔄 Запущена глубокая синхронизация базы данных с SeaweedFS...")
+    
+    added, updated = await run_s3_sync()
         
-    await msg.edit_text(f"✅ Глубокая синхронизация всего Яндекс.Диска завершена!\n\nДобавлено новых заметок: **{added_count}**\nОбновлено старых: **{updated_count}**\n\nТеперь поиск и ИИ видят абсолютно все твои записи Obsidian из любых папок!", parse_mode="Markdown")
+    await msg.edit_text(
+        f"✅ Синхронизация с SeaweedFS завершена!\n\n"
+        f"Добавлено заметок: **{added}**\n"
+        f"Обновлено заметок: **{updated}**\n\n"
+        f"Теперь локальный ИИ и поиск полностью актуальны.",
+        parse_mode="Markdown"
+    )

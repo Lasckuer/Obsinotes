@@ -15,11 +15,15 @@ class ProxyErrorFilter(logging.Filter):
 
 def setup_logger():
     logging.getLogger('httpx').setLevel(logging.WARNING)
-    logging.getLogger('yadisk').setLevel(logging.WARNING)
     logging.getLogger('apscheduler').setLevel(logging.WARNING)
     logging.getLogger('aiogram').setLevel(logging.WARNING)
     logging.getLogger('httpcore').setLevel(logging.WARNING)
     logging.getLogger('openai').setLevel(logging.WARNING)
+    
+    logging.getLogger('boto3').setLevel(logging.WARNING)
+    logging.getLogger('botocore').setLevel(logging.WARNING)
+    logging.getLogger('s3transfer').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
 
     log = logging.getLogger()
     log.setLevel(logging.INFO)
@@ -55,14 +59,8 @@ def log_s3_init():
 def log_scheduler_start():
     logger.info("Запуск планировщика задач...")
 
-def log_webhook_drop():
-    logger.info("Очистка старых обновлений Telegram...")
-
 def log_bot_start():
     logger.info("Бот успешно запущен и ждет сообщений! 🚀")
-
-def log_bot_stop():
-    logger.info("Бот остановлен пользователем.")
 
 def log_reminder_sent(r_id, user_id):
     logger.info(f"Напоминание {r_id} отправлено пользователю {user_id}")
@@ -71,10 +69,10 @@ def log_reminder_error(r_id, error):
     logger.error(f"Ошибка при отправке напоминания {r_id}: {error}")
 
 def log_user_start(user_id):
-    logger.info(f"Пользователь {user_id} запустил бота")
-
-def log_llm_retry(attempt, max_retries, wait_time):
-    logger.warning(f"Лимит ИИ. Попытка {attempt}/{max_retries}. Ждем {wait_time} сек...")
+    logger.info(f"Пользователь {user_id} запустил бота.")
 
 def log_llm_error(error):
-    logger.error(f"Ошибка при запросе к ИИ: {error}")
+    logger.error(f"Ошибка LLM/Сети: {error}")
+    
+def log_llm_retry(*args, **kwargs):
+    logger.warning(f"Повторная попытка запроса к LLM... {args}")

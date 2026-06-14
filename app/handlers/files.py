@@ -22,10 +22,9 @@ async def list_categories(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("cat:"))
 async def select_category(callback: CallbackQuery, state: FSMContext):
     category = callback.data.split(":")[1]
-    await state.update_data(current_category=category)
+    await state.update_data(current_category=category, current_categories=None)
     await state.set_state(FileBrowser.browsing_files)
     await show_files_page(callback, state, category, page=1)
-    await callback.answer()
 
 async def show_files_page(event: Message | CallbackQuery, state: FSMContext, category: str, page: int):
     files = await storage.get_files(category)
@@ -34,58 +33,50 @@ async def show_files_page(event: Message | CallbackQuery, state: FSMContext, cat
         if isinstance(event, Message):
             await event.answer(f"В папке {category} пока нет заметок.")
         else:
-            await event.message.edit_text(f"В папке {category} пока нет заметок.", reply_markup=get_back_menu_kb())
+            await event.message.edit_text(f"В папке {category} пока нет заметок.", reply_markup=get_categories_files_kb())
         return
 
     items_per_page = 10
     total_pages = (len(files) + items_per_page - 1) // items_per_page
     start_idx = (page - 1) * items_per_page
-    current_page_files = files[start_idx : start_idx + items_per_page]
+    end_idx = start_idx + items_per_page
+    page_files = files[start_idx:end_idx]
 
     await state.update_data(current_files=files, current_page=page)
-    
-    text = f"📂 Папка: {category} (Стр. {page}/{total_pages})\n\n"
-    for i, file in enumerate(current_page_files, start=1):
-        text += f"{i}. {file}\n"
 
-    inline_kb = get_pagination_inline_kb(page, total_pages)
-    reply_kb = get_numbers_kb(len(current_page_files))
+    text = f"📂 Папка: **{category}** (Страница {page}/{total_pages})\n\n"
+    for i, filename in enumerate(page_files, 1):
+        text += f"{i}. {filename}\n"
+    text += "\nОтправь номер файла цифрой, чтобы скачать его."
 
     if isinstance(event, Message):
-        await event.answer(text, reply_markup=inline_kb)
-        await event.answer("Выбери номер файла:", reply_markup=reply_kb)
+        await event.answer(text, reply_markup=get_numbers_kb(len(page_files)))
     else:
-        await event.message.edit_text(text, reply_markup=inline_kb)
-        await event.message.answer("Страница обновлена. Выбери номер:", reply_markup=reply_kb)
-
-@router.callback_query(FileBrowser.browsing_files)
-async def handle_pagination(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    category = data.get("current_category")
-    
-    if callback.data.startswith("p:"):
-        new_page = int(callback.data.split(":")[1])
-        await show_files_page(callback, state, category, new_page)
-    elif callback.data == "back_to_cats":
-        await state.set_state(FileBrowser.choosing_category)
-        await callback.message.edit_text("Выбери папку:", reply_markup=get_categories_files_kb())
-    await callback.answer()
+        await event.message.edit_text(text, reply_markup=get_pagination_inline_kb(page, total_pages))
 
 @router.message(FileBrowser.browsing_files, F.text.isdigit())
 async def handle_file_selection(message: Message, state: FSMContext):
     data = await state.get_data()
-    page, files, category = data.get("current_page"), data.get("current_files"), data.get("current_category")
+    page, files = data.get("current_page", 1), data.get("current_files", [])
     
     idx = (page - 1) * 10 + int(message.text) - 1
     if 0 <= idx < len(files):
         filename = files[idx]
-        await message.answer(f"⏳ Скачиваю: {filename}...")
+        
+        search_categories = data.get("current_categories")
+        category = search_categories[idx] if search_categories else data.get("current_category")
+        
+        status_msg = await message.answer(f"⏳ Скачиваю: `{filename}`...")
         content = await storage.download_file(category, filename)
-        await message.answer_document(BufferedInputFile(content, filename=filename))
+        
+        await status_msg.delete()
+        if content:
+            await message.answer_document(
+                BufferedInputFile(content, filename=filename), 
+                reply_markup=get_main_keyboard()
+            )
+            await state.clear()
+        else:
+            await message.answer("❌ Не удалось скачать файл из SeaweedFS.")
     else:
-        await message.answer("Нет файла под таким номером.")
-
-@router.message(F.text == "🔙 В главное меню")
-async def cancel_browser(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Вы вернулись в главное меню.", reply_markup=get_main_keyboard())
+        await message.answer("❌ Неверный номер. Выбери число из списка выше.")

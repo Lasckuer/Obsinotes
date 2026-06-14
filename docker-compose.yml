@@ -9,3 +9,5 @@ services:
       - .env
     volumes:
       - ./database.db:/app/database.db
+    environment:
+      - TZ=Europe/Moscow
