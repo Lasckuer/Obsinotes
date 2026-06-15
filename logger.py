@@ -76,3 +76,12 @@ def log_llm_error(error):
     
 def log_llm_retry(*args, **kwargs):
     logger.warning(f"Повторная попытка запроса к LLM... {args}")
+    
+def log_llm_error(error_msg):
+    logger.error(f"🧠 [LLM ERROR] Ошибка генерации: {error_msg}")
+
+def log_s3_error(error_msg):
+    logger.error(f"☁️ [S3 ERROR] Ошибка работы с хранилищем: {error_msg}")
+
+def log_db_error(error_msg):
+    logger.error(f"💾 [DB ERROR] Ошибка базы данных: {error_msg}")

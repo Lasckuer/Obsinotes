@@ -1,7 +1,7 @@
 import os
 import aioboto3
 from botocore.client import Config
-from logger import log_llm_error
+from logger import log_llm_error, log_s3_error
 
 class S3StorageService:
     def __init__(self):
@@ -43,6 +43,8 @@ class S3StorageService:
                 await s3.put_object(Bucket=self.bucket_name, Key=key, Body=content)
         except Exception as e:
             log_llm_error(f"{e}")
+            log_s3_error(f"Не удалось загрузить файл {filename}: {e}")
+        return False
 
     async def get_files(self, folder: str) -> list:
         prefix = f"{folder}/" if folder else ""
@@ -82,6 +84,7 @@ class S3StorageService:
                 return await response['Body'].read()
         except Exception as e:
             log_llm_error(f"{e}")
+            log_s3_error(f"Не удалось загрузить файл {filename}: {e}")
             return b""
             
     async def download_file_by_key(self, key: str) -> bytes:

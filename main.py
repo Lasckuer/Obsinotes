@@ -17,12 +17,14 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 from aiogram.client.session.aiohttp import AiohttpSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pytz import timezone 
 
-from app.database.db import init_db, get_due_reminders, delete_reminder, get_today_notes
+from app.database.db import init_db
 from app.services.s3_storage import S3StorageService
 from app.keyboards.reply import get_main_keyboard
 
 from app.handlers import messages, search 
+from app.services.scheduler import check_reminders, daily_digest, auto_sync_job
 
 from logger import (
     logger,
@@ -30,8 +32,6 @@ from logger import (
     log_s3_init, 
     log_scheduler_start,
     log_bot_start, 
-    log_reminder_sent, 
-    log_reminder_error, 
     log_user_start
 )
 
@@ -41,37 +41,6 @@ dp = Dispatcher()
 
 dp.include_router(search.router)
 dp.include_router(messages.router)
-
-async def check_reminders():
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    reminders = await get_due_reminders(now)
-    
-    for r_id, user_id, text in reminders:
-        try:
-            await bot.send_message(user_id, f"🔔 Напоминание:\n\n{text}")
-            await delete_reminder(r_id)
-            log_reminder_sent(r_id, user_id)
-        except Exception as e:
-            log_reminder_error(r_id, e)
-
-async def daily_digest():
-    notes = await get_today_notes()
-    if not notes:
-        return
-        
-    text = "🌙 Дайджест за сегодня:\n\n"
-    for filename, category in notes:
-        text += f"- [{category}] {filename}\n"
-        
-    logger.info(f"Сформирован ежедневный дайджест:\n{text}")
-    
-async def auto_sync_job():
-    logger.info("Запуск автоматической ночной синхронизации S3...")
-    try:
-        added, updated = await messages.run_s3_sync()
-        logger.info(f"Авто-синхронизация завершена. Добавлено: {added}, Обновлено: {updated}")
-    except Exception as e:
-        logger.error(f"Ошибка во время авто-синхронизации S3: {e}")
 
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -90,21 +59,25 @@ async def main():
     await storage.init_folders()
     
     log_scheduler_start()
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_reminders, 'interval', seconds=30)
-    scheduler.add_job(daily_digest, 'cron', hour=22, minute=0)
+    
+    tz = timezone('Europe/Moscow') 
+    scheduler = AsyncIOScheduler(timezone=tz)
+    
+    admin_id_str = os.getenv("ADMIN_ID")
+    admin_id = int(admin_id_str) if admin_id_str else None
+
+    scheduler.add_job(check_reminders, 'interval', seconds=30, args=[bot])
+    
+    if admin_id:
+        scheduler.add_job(daily_digest, 'cron', hour=22, minute=0, args=[bot, admin_id])
+    else:
+        logger.warning("⚠️ ADMIN_ID не указан в .env! Ежедневный дайджест отправляться не будет.")
+        
     scheduler.add_job(auto_sync_job, 'cron', hour=3, minute=0)
     scheduler.start()
-    
+
     log_bot_start()
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        await dp.start_polling(bot)
-    finally:
-        await bot.session.close()
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен пользователем.")
+    asyncio.run(main())

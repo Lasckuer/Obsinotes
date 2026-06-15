@@ -1,3 +1,5 @@
+import uuid
+import aiosqlite
 from openai import AsyncOpenAI
 import httpx
 import json
@@ -23,12 +25,20 @@ Date: {now_str}
 Input: {text}
 URL: {url_content}
 
-{{"category": "one of: Ideas, Reminders, Notes, Links, Workouts, Finance",
-"tags": "#tag1, #tag2",
+{{
+"category": "Finance, Ideas, Notes, Reminders",
+"tags": ["tag1", "tag2"],
 "corrected_text": "formatted markdown in Russian",
-"filename": "short_latin_name.md",
+"filename": "понятное_название_из_сути_заметки.md",
 "remind_time": "YYYY-MM-DD HH:MM or empty string",
-"expense_amount": float or 0}}"""
+"expense_amount": float or 0
+}}
+
+RULES:
+1. "tags": list of strings WITHOUT the # symbol.
+2. "filename": generate a short, descriptive filename in Russian based on the input text (e.g., "сходить_в_магазин_21.md"). Do not use random letters.
+3. NEVER leave "corrected_text" or "filename" empty. If no changes are needed, copy the input text entirely into that field.
+"""
 
     try:
         if delay_callback:
@@ -48,41 +58,22 @@ URL: {url_content}
         log_llm_error(f"{e}")
         return {}
 
-async def answer_question(query: str, context: list) -> str:
-    context_lines = []
-    for c in context:
-        if len(c) >= 2:
-            category = c[0]
-            content = c[1]
-            date = c[2] if len(c) >= 3 else "No date"
-            context_lines.append(f"[{category}] {date}: {content}")
-            
-    context_str = "\n".join(context_lines)[:3000]
-    
-    prompt = f"""Context:
-{context_str}
-
-Question: {query}
-
-Answer in Russian clearly and concisely based ONLY on the context. If you don't know, say so."""
-
-    try:
-        response = await client.chat.completions.create(
-            model="gemma3:4b",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=600
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        log_llm_error(f"{e}")
-        return "Ошибка при обращении к ИИ."
-
 async def summarize_document(text: str, filename: str) -> dict:
     text_chunk = text[:3500]
-    prompt = f"""Extract key facts and 3-5 flashcards from this text. Output ONLY valid JSON.
-{{"filename": "{filename}_summary.md",
-"markdown_content": "## Summary\\n...\\n## Flashcards\\n**Q:** ...\\n**A:** ..."}}
+    prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
+Process the following text and format it beautifully in Markdown.
+
+RULES:
+1. Output strictly in RUSSIAN (Отвечай строго на РУССКОМ языке).
+2. Format as a clean, structured note (use ## headings, bullet points, and bold text for key terms).
+3. DO NOT generate Q&A, flashcards, or tests unless explicitly requested.
+4. Output ONLY valid JSON.
+
+{{
+"filename": "{filename}_конспект.md",
+"tags": ["конспект", "документ"],
+"markdown_content": "## Основная идея\\n...\\n## Ключевые моменты\\n- Факт 1\\n- Факт 2"
+}}
 
 Text:
 {text_chunk}"""
@@ -98,23 +89,32 @@ Text:
         return json.loads(response.choices[0].message.content.strip())
     except Exception as e:
         log_llm_error(f"{e}")
-        return {"filename": f"{filename}.md", "markdown_content": "Ошибка генерации."}
+        return {"filename": f"{filename}.md", "markdown_content": f"### Оригинальный текст документа:\\n\\n{text}"}
 
 async def process_examiner_text(text: str) -> str:
-    prompt = f"""Extract main points and create 5 flashcards from the text. Answer in Russian markdown.
-Text: {text[:3000]}"""
+    prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
+Process the following text and format it beautifully in Markdown.
+
+RULES:
+1. Output strictly in RUSSIAN (Отвечай строго на РУССКОМ языке).
+2. Format as a clean, structured note. Use ## headings for main topics, bullet points (-) for lists, and **bold text** for key terms.
+3. DO NOT generate Q&A, flashcards, or tests.
+4. Output ONLY the raw Markdown text. Do not add any introductory words or conversational filler.
+
+Text to format:
+{text[:3500]}"""
 
     try:
         response = await client.chat.completions.create(
             model="gemma3:4b",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=800
+            temperature=0.2,
+            max_tokens=1500
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        log_llm_error(f"{e}")
-        return "Ошибка генерации."
+        log_llm_error(f"Ошибка в process_examiner_text: {e}")
+        return f"### Оригинальный текст (ошибка генерации красоты):\n\n{text}"
 
 async def transcribe_audio(file_path: str) -> str:
     try:
@@ -123,7 +123,63 @@ async def transcribe_audio(file_path: str) -> str:
                 model="whisper-1",
                 file=audio_file
             )
-        return response.text
+            return response.text
     except Exception as e:
         log_llm_error(f"{e}")
         return ""
+
+async def get_rephrased_filename(category: str, filename: str, original_text: str) -> str:
+    unique_filename = filename
+    
+    async with aiosqlite.connect("database.db") as db:
+        while True:
+            async with db.execute(
+                "SELECT 1 FROM notes_log WHERE filename = ? AND category LIKE ?", 
+                (unique_filename, f"%{category}")
+            ) as cursor:
+                if not await cursor.fetchone():
+                    break
+            
+            prompt = f"""Предыдущее название файла '{unique_filename}' уже занято. 
+Придумай ДРУГОЕ, новое короткое название для файла (на русском языке, без пробелов, расширение .md) на основе этого текста:
+'{original_text[:200]}'
+
+Выведи ТОЛЬКО название файла и ничего больше. Пример: новое_название.md"""
+            
+            try:
+                response = await client.chat.completions.create(
+                    model="gemma3:4b",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.7
+                )
+                ai_name = response.choices[0].message.content.strip().replace(" ", "_")
+                unique_filename = ai_name if ai_name.endswith('.md') else f"{ai_name}.md"
+            except Exception:
+                base, ext = os.path.splitext(unique_filename)
+                unique_filename = f"{base}_{uuid.uuid4().hex[:4]}{ext}"
+                
+    return unique_filename
+
+async def answer_question(question: str, context: str) -> str:
+    """Генерирует ответ на вопрос пользователя на основе его заметок"""
+    prompt = f"""Ты — умный ИИ-ассистент. Ответь на вопрос пользователя, основываясь ТОЛЬКО на предоставленных ниже заметках.
+Если в заметках нет ответа на вопрос, честно скажи об этом.
+Отвечай строго на РУССКОМ языке, используй Markdown для красивого форматирования.
+
+Заметки пользователя (контекст):
+{context[:3500]}
+
+Вопрос пользователя: 
+{question}"""
+
+    try:
+        response = await client.chat.completions.create(
+            model="gemma3:4b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        log_llm_error(f"Ошибка в answer_question: {e}")
+        return "❌ Ошибка при обращении к нейросети во время поиска."

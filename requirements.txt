@@ -10,3 +10,4 @@ pymupdf
 python-docx
 aioboto3
 botocore
+pytz
