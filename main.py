@@ -42,9 +42,6 @@ session = AiohttpSession(proxy=proxy_url) if proxy_url else None
 bot = Bot(token=os.getenv("BOT_TOKEN"), session=session)
 
 redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
-#redis_storage = RedisStorage.from_url(redis_url)
-
-#dp = Dispatcher(storage=redis_storage)
 
 if redis_url := os.getenv("REDIS_URL"):
     redis_storage = RedisStorage.from_url(redis_url)
