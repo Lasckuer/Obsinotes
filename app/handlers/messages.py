@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from app.services.llm import get_rephrased_filename, process_text, stream_summarize_document, summarize_document, process_examiner_text, transcribe_audio, stream_process_examiner_text
 from app.services.s3_storage import S3StorageService
-from app.database.db import add_reminder, add_note_log
+from app.database.db import add_reminder, add_note_log, get_recent_notes_for_linking
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard
 from docx import Document
 from aiogram.exceptions import TelegramBadRequest
@@ -116,6 +116,8 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
     if len(text) > 1000:
         await processing_msg.edit_text("🧠 Пишу красивый конспект...")
         
+        recent_notes = await get_recent_notes_for_linking(10)
+        
         full_text = ""
         last_update_time = time.time()
         update_interval = 2.0
@@ -124,7 +126,7 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
         frame_idx = 0
         
         try:
-            async for chunk in stream_process_examiner_text(text):
+            async for chunk in stream_process_examiner_text(text, recent_notes=recent_notes):
                 full_text += chunk
                 current_time = time.time()
                 
@@ -164,7 +166,9 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
             await processing_msg.edit_text(f"❌ Ошибка: {e}")
             await state.clear()
     else:
-        processed = await process_text(text)
+        await processing_msg.edit_text("🧠 Думаю...")
+        recent_notes = await get_recent_notes_for_linking(10)
+        processed = await process_text(text, delay_callback=None, url_content="", recent_notes=recent_notes)
         
         if not processed:
             await processing_msg.edit_text("❌ Ошибка при обработке заметки.")
@@ -241,6 +245,7 @@ async def handle_document(message: Message, state: FSMContext, bot):
 
     if text:
         await processing_msg.edit_text("🧠 Генерирую конспект...")
+        recent_notes = await get_recent_notes_for_linking(10)
         
         full_text = ""
         last_update_time = time.time()
@@ -250,7 +255,7 @@ async def handle_document(message: Message, state: FSMContext, bot):
         frame_idx = 0
         
         try:
-            async for chunk in stream_summarize_document(text):
+            async for chunk in stream_summarize_document(text, recent_notes=recent_notes):
                 full_text += chunk
                 current_time = time.time()
                 

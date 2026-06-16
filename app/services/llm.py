@@ -17,13 +17,16 @@ client = AsyncOpenAI(
     http_client=httpx.AsyncClient()
 )
 
-async def process_text(text: str, delay_callback=None, url_content: str = "") -> dict:
+async def process_text(text: str, delay_callback=None, url_content: str = "", recent_notes: str = "") -> dict:
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     prompt = f"""You are a data parser. Output ONLY valid JSON.
 Date: {now_str}
 Input: {text}
 URL: {url_content}
+
+Existing recent notes in user's Obsidian:
+{recent_notes}
 
 {{
 "category": "Finance, Ideas, Notes, Reminders",
@@ -36,8 +39,9 @@ URL: {url_content}
 
 RULES:
 1. "tags": list of strings WITHOUT the # symbol.
-2. "filename": generate a short, descriptive filename in Russian based on the input text (e.g., "сходить_в_магазин_21.md"). Do not use random letters.
-3. NEVER leave "corrected_text" or "filename" empty. If no changes are needed, copy the input text entirely into that field.
+2. "filename": short, descriptive filename in Russian.
+3. NEVER leave "corrected_text" empty.
+4. IMPORTANT: If the Input conceptually relates to any of the "Existing recent notes", append this exact text at the end of "corrected_text": '\\n\\n**Связанные заметки:** [[Name]]' (use the exact Name from the list).
 """
 
     try:
@@ -213,15 +217,20 @@ async def stream_answer_question(question: str, context: str):
         log_llm_error(f"Ошибка в stream_answer_question: {e}")
         yield "❌ Произошла ошибка при обращении к нейросети."
         
-async def stream_process_examiner_text(text: str):
+async def stream_process_examiner_text(text: str, recent_notes: str = ""):
     prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
 Process the following text and format it beautifully in Markdown.
 
+Existing recent notes in user's Obsidian:
+{recent_notes}
+
 RULES:
-1. Output strictly in RUSSIAN (Отвечай строго на РУССКОМ языке).
-2. Format as a clean, structured note. Use ## headings for main topics, bullet points (-) for lists, and **bold text** for key terms.
+1. Output strictly in RUSSIAN.
+2. Format as a clean, structured note.
 3. DO NOT generate Q&A, flashcards, or tests.
-4. Output ONLY the raw Markdown text. Do not add any introductory words or conversational filler.
+4. IMPORTANT: If the text conceptually relates to any of the "Existing recent notes", add a section at the very end of the markdown:
+## Связанные заметки
+- [[Exact name of the note from the list]]
 
 Text to format:
 {text[:3500]}"""
@@ -241,16 +250,22 @@ Text to format:
         log_llm_error(f"Ошибка в stream_process_examiner_text: {e}")
         yield f"### Оригинальный текст (ошибка генерации красоты):\n\n{text}"
         
-async def stream_summarize_document(text: str):
+async def stream_summarize_document(text: str, recent_notes: str = ""):
     text_chunk = text[:3500]
     prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
 Process the following text from a document and format it beautifully in Markdown.
+
+Existing recent notes in user's Obsidian:
+{recent_notes}
 
 RULES:
 1. Output strictly in RUSSIAN (Отвечай строго на РУССКОМ языке).
 2. Format as a clean, structured note (use ## headings, bullet points, and bold text for key terms).
 3. DO NOT generate Q&A, flashcards, or tests.
 4. Output ONLY the raw Markdown text. Do not add JSON or any introductory words.
+5. IMPORTANT: If the text conceptually relates to any of the "Existing recent notes", add a section at the very end of the markdown:
+## Связанные заметки
+- [[Exact name of the note from the list]]
 
 Text:
 {text_chunk}"""

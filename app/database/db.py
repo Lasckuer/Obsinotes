@@ -103,3 +103,20 @@ async def get_recent_context(limit: int = 10):
             for cat, cont, date in rows:
                 context += f"[{date}] [{cat}]: {cont}\n"
             return context
+        
+async def get_recent_notes_for_linking(limit: int = 10) -> str:
+    """Получает последние заметки для построения графа связей в Obsidian"""
+    async with aiosqlite.connect("database.db") as db:
+        async with db.execute(
+            "SELECT filename, content FROM notes_log ORDER BY date DESC LIMIT ?", 
+            (limit,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            context = ""
+            for fname, cont in rows:
+                if not fname: 
+                    continue
+                clean_name = fname.replace(".md", "")
+                snippet = cont[:150].replace('\n', ' ') if cont else ""
+                context += f"- [[{clean_name}]]: {snippet}...\n"
+            return context
