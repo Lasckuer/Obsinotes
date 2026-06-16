@@ -17,6 +17,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 from aiogram.client.session.aiohttp import AiohttpSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiogram.fsm.storage.redis import RedisStorage
 from pytz import timezone 
 
 from app.database.db import init_db
@@ -37,7 +38,11 @@ from logger import (
 
 session = AiohttpSession(proxy=proxy_url) if proxy_url else None
 bot = Bot(token=os.getenv("BOT_TOKEN"), session=session)
-dp = Dispatcher()
+
+redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+redis_storage = RedisStorage.from_url(redis_url)
+
+dp = Dispatcher(storage=redis_storage)
 
 dp.include_router(search.router)
 dp.include_router(messages.router)
