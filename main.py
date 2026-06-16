@@ -33,16 +33,26 @@ from logger import (
     log_s3_init, 
     log_scheduler_start,
     log_bot_start, 
-    log_user_start
+    log_user_start,
+    log_redis_on_info,
+    log_redis_off_info
 )
 
 session = AiohttpSession(proxy=proxy_url) if proxy_url else None
 bot = Bot(token=os.getenv("BOT_TOKEN"), session=session)
 
 redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
-redis_storage = RedisStorage.from_url(redis_url)
+#redis_storage = RedisStorage.from_url(redis_url)
 
-dp = Dispatcher(storage=redis_storage)
+#dp = Dispatcher(storage=redis_storage)
+
+if redis_url := os.getenv("REDIS_URL"):
+    redis_storage = RedisStorage.from_url(redis_url)
+    dp = Dispatcher(storage=redis_storage)
+    log_redis_on_info()
+else:
+    dp = Dispatcher()
+    log_redis_off_info()
 
 dp.include_router(search.router)
 dp.include_router(messages.router)

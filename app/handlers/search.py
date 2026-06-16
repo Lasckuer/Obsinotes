@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 from app.database.db import search_notes, get_recent_context
-from app.services.llm import answer_question, stream_answer_question
+from app.services.llm import stream_answer_question
 from app.services.s3_storage import S3StorageService
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard, get_numbers_kb
 

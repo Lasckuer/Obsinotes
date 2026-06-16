@@ -64,6 +64,12 @@ def log_bot_start():
 
 def log_reminder_sent(r_id, user_id):
     logger.info(f"Напоминание {r_id} отправлено пользователю {user_id}")
+    
+def log_redis_off_info():
+    logger.info(f"Redis не подключен. Используется MemoryStorage для хранения состояния бота...")
+    
+def log_redis_on_info():
+    logger.info(f"Redis подключен и используется для хранения состояния бота...")
 
 def log_reminder_error(r_id, error):
     logger.error(f"Ошибка при отправке напоминания {r_id}: {error}")

@@ -3,7 +3,7 @@ from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from app.services.llm import get_rephrased_filename, process_text, stream_summarize_document, summarize_document, process_examiner_text, transcribe_audio, stream_process_examiner_text
+from app.services.llm import get_rephrased_filename, process_text, stream_summarize_document, transcribe_audio, stream_process_examiner_text
 from app.services.s3_storage import S3StorageService
 from app.database.db import add_reminder, add_note_log, get_recent_notes_for_linking
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard
@@ -31,7 +31,10 @@ async def cmd_back(message: Message, state: FSMContext):
 
 @router.message(F.text == "📝 Отправить заметку")
 async def prompt_note(message: Message, state: FSMContext):
-    await message.answer("Напиши текст, скинь ссылку, документ .docx, голосовое сообщение или фото:", reply_markup=get_cancel_keyboard())
+    await message.answer(
+        "Напиши текст, скинь ссылку, документ .docx, голосовое сообщение или фото:", 
+        reply_markup=get_cancel_keyboard()
+    )
     await state.set_state(NoteState.waiting_for_text)
 
 @router.message(NoteState.waiting_for_text, F.photo)
@@ -40,8 +43,8 @@ async def handle_photo(message: Message, state: FSMContext, bot):
     
     async def on_delay():
         try:
-            await processing_msg.edit_text("⚠️ Извините за задержку, пробую достучаться еще раз...")
-        except Exception:
+            await processing_msg.edit_text("⚠️ Извините за задержку, нейросеть еще думает...")
+        except TelegramBadRequest:
             pass
 
     photo = message.photo[-1]
@@ -49,43 +52,41 @@ async def handle_photo(message: Message, state: FSMContext, bot):
     downloaded_file = await bot.download_file(file_info.file_path)
     
     filename_img = f"img_{uuid.uuid4().hex[:8]}.jpg"
-    s3_img_folder = "TelegramBot/Attachments"
+    s3_img_folder = "TelegramBot/Photos"
     await storage.upload_file(s3_img_folder, filename_img, downloaded_file.read())
     
-    caption = message.caption if message.caption else ""
+    caption = message.caption or ""
+    md_content = f"![[{filename_img}]]\n"
     text_to_process = f"{md_content}\n{caption}"
     
-    md_content = f"![[{filename_img}]]\n"
-    category = "Notes"
-    base_name = processed.get("filename", "").strip()
-    if not base_name:
-        base_name = f"photo_{uuid.uuid4().hex[:4]}"
-    md_filename = base_name if base_name.endswith('.md') else f"{base_name}.md"
-    timestamp = datetime.datetime.now().strftime("%H%M%S")
+    category = "Photos"
     tags_str = ""
-    corrected_text = ""
-    
-    if message.caption:
-        processed = await process_text(message.caption, delay_callback=on_delay)
-        category = processed.get("category", "Notes")
+    corrected_text = text_to_process
+    base_name = f"photo_{uuid.uuid4().hex[:4]}"
+
+    if caption:
+        processed = await process_text(caption, delay_callback=on_delay)
+        category = processed.get("category", "Photos")
         tags = processed.get("tags", [])
         tags_str = ", ".join(tags)
-        corrected_text = processed.get("corrected_text", "")
         
-        md_content = f"---\ntags: [{tags_str}]\ndate: {datetime.datetime.now().strftime('%Y-%m-%d')}\n---\n\n{md_content}\n{corrected_text}"
-        base_name = processed.get("filename", "photo")
-        md_filename = f"{base_name}.md"
-        
-        reminder_time = processed.get("reminder_time")
-        if reminder_time and category == "Reminders":
-            await add_reminder(message.from_user.id, corrected_text, reminder_time)
+        if processed.get("corrected_text"):
+            corrected_text = f"{md_content}\n{processed.get('corrected_text')}"
+            
+        if processed.get("filename"):
+            base_name = processed.get("filename").strip()
 
-    await storage.upload_file(f"TelegramBot/{category}", md_filename, md_content.encode('utf-8'))
-    await add_note_log(md_filename, category, tags_str, corrected_text)
+    md_filename = base_name if base_name.endswith('.md') else f"{base_name}.md"
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d")
     
-    await processing_msg.edit_text(f"Фото ({md_filename}) успешно сохранено в {category}.")
+    final_md = f"---\ntags: [{tags_str}]\ndate: {timestamp}\n---\n\n{corrected_text}"
+
+    await add_note_log(filename=md_filename, category=category, tags=tags_str, content=final_md)
+    
+    await processing_msg.edit_text(f"✅ Фото сохранено как `{md_filename}` в категорию `{category}`")
     await state.clear()
-    await message.answer("Вы в главном меню.", reply_markup=get_main_keyboard())
+    await message.answer("Готово! Вы вернулись в главное меню 🏠", reply_markup=get_main_keyboard())
+    
 
 @router.message(NoteState.waiting_for_text, F.voice | F.audio)
 async def handle_audio(message: Message, state: FSMContext, bot):
