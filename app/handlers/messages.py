@@ -250,24 +250,24 @@ async def handle_document(message: Message, state: FSMContext, bot):
     await message.answer("Готово! Вы вернулись в главное меню 🏠", reply_markup=get_main_keyboard())
     
 async def run_s3_sync():
-    added_count = 0
-    updated_count = 0
-    
     async with aiosqlite.connect("database.db") as db:
-        all_keys = await storage.get_all_files()
-        for key in all_keys:
-            if not key.endswith('.md') and not key.endswith('.txt'):
+        files = await storage.get_all_files()
+        added_count = 0
+        updated_count = 0
+
+        for key in files:
+            if not key.endswith('.md') or '.obsidian/' in key or '.trash/' in key:
                 continue
-                
+            
             parts = key.split('/')
             filename = parts[-1]
-            category = "/".join(parts[:-1]) if len(parts) > 1 else ""
-            
+            category = "Root" if len(parts) == 1 else "/".join(parts[:-1])
+
             try:
                 content_bytes = await storage.download_file_by_key(key)
                 if not content_bytes:
                     continue
-                
+                    
                 text_content = content_bytes.decode('utf-8', errors='ignore')
                 
                 async with db.execute(
@@ -289,10 +289,13 @@ async def run_s3_sync():
                             (text_content, exists[0])
                         )
                         updated_count += 1
-            except Exception:
+                        
+            except Exception as e:
+                print(f"⚠️ Ошибка синхронизации файла {key}: {e}")
                 continue
                 
         await db.commit()
+        
     return added_count, updated_count
 
 @router.message(Command("sync"))
