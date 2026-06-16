@@ -183,3 +183,89 @@ async def answer_question(question: str, context: str) -> str:
     except Exception as e:
         log_llm_error(f"Ошибка в answer_question: {e}")
         return "❌ Ошибка при обращении к нейросети во время поиска."
+    
+async def stream_answer_question(question: str, context: str):
+    """Генерирует потоковый ответ на вопрос пользователя (эффект печати)"""
+    prompt = f"""Ты — умный ИИ-ассистент. Ответь на вопрос пользователя, основываясь ТОЛЬКО на предоставленных ниже заметках.
+Если в заметках нет ответа на вопрос, честно скажи об этом.
+Отвечай строго на РУССКОМ языке, используй Markdown для красивого форматирования.
+
+Заметки пользователя (контекст):
+{context[:3500]}
+
+Вопрос пользователя: 
+{question}"""
+
+    try:
+        response = await client.chat.completions.create(
+            model="gemma3:4b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1000,
+            stream=True
+        )
+        
+        async for chunk in response:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
+                
+    except Exception as e:
+        log_llm_error(f"Ошибка в stream_answer_question: {e}")
+        yield "❌ Произошла ошибка при обращении к нейросети."
+        
+async def stream_process_examiner_text(text: str):
+    prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
+Process the following text and format it beautifully in Markdown.
+
+RULES:
+1. Output strictly in RUSSIAN (Отвечай строго на РУССКОМ языке).
+2. Format as a clean, structured note. Use ## headings for main topics, bullet points (-) for lists, and **bold text** for key terms.
+3. DO NOT generate Q&A, flashcards, or tests.
+4. Output ONLY the raw Markdown text. Do not add any introductory words or conversational filler.
+
+Text to format:
+{text[:3500]}"""
+
+    try:
+        response = await client.chat.completions.create(
+            model="gemma3:4b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=1500,
+            stream=True
+        )
+        async for chunk in response:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
+    except Exception as e:
+        log_llm_error(f"Ошибка в stream_process_examiner_text: {e}")
+        yield f"### Оригинальный текст (ошибка генерации красоты):\n\n{text}"
+        
+async def stream_summarize_document(text: str):
+    text_chunk = text[:3500]
+    prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
+Process the following text from a document and format it beautifully in Markdown.
+
+RULES:
+1. Output strictly in RUSSIAN (Отвечай строго на РУССКОМ языке).
+2. Format as a clean, structured note (use ## headings, bullet points, and bold text for key terms).
+3. DO NOT generate Q&A, flashcards, or tests.
+4. Output ONLY the raw Markdown text. Do not add JSON or any introductory words.
+
+Text:
+{text_chunk}"""
+
+    try:
+        response = await client.chat.completions.create(
+            model="gemma3:4b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=1500,
+            stream=True
+        )
+        async for chunk in response:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
+    except Exception as e:
+        log_llm_error(f"{e}")
+        yield f"### Оригинальный текст документа (ошибка генерации):\n\n{text}"

@@ -1,9 +1,11 @@
+import time
 from aiogram import Router, F
 from aiogram.types import Message, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 from app.database.db import search_notes, get_recent_context
-from app.services.llm import answer_question
+from app.services.llm import answer_question, stream_answer_question
 from app.services.s3_storage import S3StorageService
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard, get_numbers_kb
 
@@ -33,17 +35,45 @@ async def handle_search_or_ai(message: Message, state: FSMContext):
     is_question = query.endswith("?") or query.lower().startswith(ai_triggers)
     
     if is_question:
-        processing_msg = await message.answer("🤖 Изучаю твои записи...")
-        context = await get_recent_context(20)
-        answer = await answer_question(query, context)
-        
-        await processing_msg.delete()
-        
-        if not answer or not str(answer).strip():
-            answer = "❌ ИИ вернул пустой ответ. Возможно, локальная модель не запущена, перегружена или произошла ошибка генерации."
+            status_msg = await message.answer("🤔 Изучаю заметки и формулирую ответ...")
+            context_text = await get_recent_context(limit=15)
             
-        await message.answer(answer, reply_markup=get_main_keyboard())
-        await state.clear()
+            full_text = ""
+            last_update_time = time.time()
+            update_interval = 2.0
+            
+            frames = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
+            frame_idx = 0
+            
+            try:
+                async for chunk in stream_answer_question(query, context_text):
+                    full_text += chunk
+                    current_time = time.time()
+                    
+                    if current_time - last_update_time >= update_interval:
+                        try:
+                            frame = frames[frame_idx % len(frames)]
+                            status_text = f"{frame} **ИИ изучает твои заметки и пишет ответ...**\n\nСгенерировано символов: `{len(full_text)}`"
+                            await status_msg.edit_text(status_text, parse_mode="Markdown")
+                            frame_idx += 1
+                        except Exception as e:
+                            print(f"⚠️ Сетевой скачок при поиске (игнорируем): {e}")
+                            
+                        last_update_time = current_time
+
+                if full_text.strip():
+                    try:
+                        await status_msg.edit_text(full_text, parse_mode="Markdown")
+                    except TelegramBadRequest:
+                        await status_msg.edit_text(full_text)
+                else:
+                    await status_msg.edit_text("❌ Нейросеть вернула пустой ответ.")
+                    
+            except Exception as e:
+                await status_msg.edit_text(f"❌ Ошибка стриминга: {e}")
+                
+            await message.answer("Готово! Вы вернулись в главное меню 🏠", reply_markup=get_main_keyboard())
+            await state.clear()
         
     else:
         status_msg = await message.answer("🔍 Сканирую записи Obsidian... подожди немного.")

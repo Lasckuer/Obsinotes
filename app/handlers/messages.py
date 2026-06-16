@@ -3,12 +3,14 @@ from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from app.services.llm import get_rephrased_filename, process_text, summarize_document, process_examiner_text, transcribe_audio
+from app.services.llm import get_rephrased_filename, process_text, stream_summarize_document, summarize_document, process_examiner_text, transcribe_audio, stream_process_examiner_text
 from app.services.s3_storage import S3StorageService
 from app.database.db import add_reminder, add_note_log
 from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard
 from docx import Document
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.state import State, StatesGroup
+import time
 import os
 import datetime
 import uuid
@@ -112,18 +114,55 @@ async def handle_text(message: Message, state: FSMContext):
 
 async def process_note_text(message: Message, state: FSMContext, text: str, processing_msg: Message):
     if len(text) > 1000:
-        result_text = await process_examiner_text(text)
+        await processing_msg.edit_text("🧠 Пишу красивый конспект...")
         
-        md_content = result_text
-        category = "Notes"
-        s3_folder = f"TelegramBot/{category}"
+        full_text = ""
+        last_update_time = time.time()
+        update_interval = 2.0
         
-        raw_filename = f"note_{uuid.uuid4().hex[:4]}.md"
-        md_filename = await get_rephrased_filename(category, raw_filename, text)
+        frames = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
+        frame_idx = 0
         
-        await storage.upload_file(s3_folder, md_filename, md_content.encode('utf-8'))
-        await add_note_log(md_filename, s3_folder, "notes", md_content)
-        await processing_msg.edit_text(f"Сохранен конспект в {s3_folder}: `{md_filename}`", parse_mode="Markdown")
+        try:
+            async for chunk in stream_process_examiner_text(text):
+                full_text += chunk
+                current_time = time.time()
+                
+                if current_time - last_update_time >= update_interval:
+                    try:
+                        frame = frames[frame_idx % len(frames)]
+                        status_text = f"{frame} **Нейросеть пишет конспект...**\n\nСгенерировано символов: `{len(full_text)}`"
+                        await processing_msg.edit_text(status_text, parse_mode="Markdown")
+                        frame_idx += 1
+                    except Exception as e:
+                        print(f"⚠️ Сетевой скачок при стриминге (игнорируем): {e}")
+                        
+                    last_update_time = current_time
+
+            md_content = full_text.strip()
+            if not md_content:
+                md_content = text
+                
+            try:
+                await processing_msg.edit_text(md_content, parse_mode="Markdown")
+            except TelegramBadRequest:
+                await processing_msg.edit_text(md_content)
+                
+            category = "Notes"
+            s3_folder = f"TelegramBot/{category}"
+            
+            raw_filename = f"note_{uuid.uuid4().hex[:4]}.md"
+            md_filename = await get_rephrased_filename(category, raw_filename, text)
+            
+            await storage.upload_file(s3_folder, md_filename, md_content.encode('utf-8'))
+            await add_note_log(md_filename, s3_folder, "notes", md_content)
+            
+            await message.reply(f"✅ Сохранен конспект в `{s3_folder}/{md_filename}`\n\nГотово! Вы вернулись в главное меню 🏠", parse_mode="Markdown", reply_markup=get_main_keyboard())
+            await state.clear()
+            
+        except Exception as e:
+            await processing_msg.edit_text(f"❌ Ошибка: {e}")
+            await state.clear()
     else:
         processed = await process_text(text)
         
@@ -203,51 +242,63 @@ async def handle_document(message: Message, state: FSMContext, bot):
     if text:
         await processing_msg.edit_text("🧠 Генерирую конспект...")
         
-        processed = await summarize_document(text, message.document.file_name) 
+        full_text = ""
+        last_update_time = time.time()
+        update_interval = 2.0
         
-        if processed:
-            summary = processed.get("summary") or processed.get("markdown_content")
-            if not summary or not summary.strip():
-                summary = f"### Оригинальный текст документа (ИИ вернул пустой ответ):\n\n{text}"
-
-            tags = processed.get("tags", [])
-            
-            if isinstance(tags, str):
-                tags_list = [t.strip().lstrip('#') for t in tags.split(",")]
-            elif isinstance(tags, list):
-                tags_list = [str(t).strip().lstrip('#') for t in tags]
-            else:
-                tags_list = []
+        frames = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
+        frame_idx = 0
+        
+        try:
+            async for chunk in stream_summarize_document(text):
+                full_text += chunk
+                current_time = time.time()
                 
-            tags_str = ", ".join([t for t in tags_list if t])
-            
+                if current_time - last_update_time >= update_interval:
+                    try:
+                        frame = frames[frame_idx % len(frames)]
+                        status_text = f"{frame} **Читаю документ и пишу конспект...**\n\nСгенерировано символов: `{len(full_text)}`"
+                        await processing_msg.edit_text(status_text, parse_mode="Markdown")
+                        frame_idx += 1
+                    except Exception as e:
+                        print(f"⚠️ Сетевой скачок при стриминге (игнорируем): {e}")
+                        
+                    last_update_time = current_time
+                    
+            summary = full_text.strip()
+            if not summary:
+                summary = f"### Оригинальный текст документа:\n\n{text}"
+                
+            tags_str = "конспект, документ"
             date_str = datetime.datetime.now().strftime('%d.%m.%Y')
-            full_text = f"---\ntags: [{tags_str}]\ndate: {date_str}\n---\n\n{summary}"
             
+            final_md = f"---\ntags: [{tags_str}]\ndate: {date_str}\n---\n\n{summary}"
+            
+            try:
+                await processing_msg.edit_text(final_md, parse_mode="Markdown")
+            except TelegramBadRequest:
+                await processing_msg.edit_text(final_md)
+                
             category = "Notes"
             s3_folder = f"TelegramBot/{category}"
 
-            clean_name = processed.get("filename", "").strip()
-            if not clean_name:
-                clean_name = f"документ_{uuid.uuid4().hex[:4]}.md"
-                
-            fname = clean_name if clean_name.endswith('.md') else f"{clean_name}.md" 
-            fname = fname.replace(" ", "_")
+            clean_name = message.document.file_name.replace(".docx", "").strip()
+            clean_name = clean_name.replace(" ", "_")
+            fname = f"{clean_name}.md"
         
             fname = await get_rephrased_filename(category, fname, summary)
 
-            # Загружаем в S3
-            await storage.upload_file(s3_folder, fname, full_text.encode('utf-8'))
-            
+            await storage.upload_file(s3_folder, fname, final_md.encode('utf-8'))
             await add_note_log(fname, s3_folder, tags_str, summary)
-            await processing_msg.edit_text(f"✅ Документ законспектирован в `{s3_folder}/{fname}`", parse_mode="Markdown")
-        else:
-            await processing_msg.edit_text("❌ Ошибка при генерации саммари.")
+            
+            await message.answer(f"✅ Документ законспектирован в `{s3_folder}/{fname}`\n\nГотово! Вы вернулись в главное меню 🏠", parse_mode="Markdown", reply_markup=get_main_keyboard())
+            
+        except Exception as e:
+            await processing_msg.edit_text(f"❌ Ошибка стриминга: {e}")
     else:
         await processing_msg.edit_text("❌ Документ оказался пустым.")
         
     await state.clear()
-    await message.answer("Готово! Вы вернулись в главное меню 🏠", reply_markup=get_main_keyboard())
     
 async def run_s3_sync():
     async with aiosqlite.connect("database.db") as db:
