@@ -29,7 +29,7 @@ Existing recent notes in user's Obsidian:
 {recent_notes}
 
 {{
-"category": "Finance, Ideas, Notes, Reminders",
+"category": "Choose ONLY ONE: Finance, Ideas, Notes, Reminders",
 "tags": ["tag1", "tag2"],
 "corrected_text": "formatted markdown in Russian",
 "filename": "понятное_название_из_сути_заметки.md",
@@ -38,10 +38,11 @@ Existing recent notes in user's Obsidian:
 }}
 
 RULES:
-1. "tags": list of strings WITHOUT the # symbol.
-2. "filename": short, descriptive filename in Russian.
-3. NEVER leave "corrected_text" empty.
-4. IMPORTANT: If the Input conceptually relates to any of the "Existing recent notes", append this exact text at the end of "corrected_text": '\\n\\n**Связанные заметки:** [[Name]]' (use the exact Name from the list).
+1. "category": Must be one of the four: Finance, Ideas, Notes, Reminders. DO NOT list them all, pick only the best one.
+2. "tags": list of strings WITHOUT the # symbol.
+3. "filename": short, descriptive filename in Russian.
+4. NEVER leave "corrected_text" empty.
+5. IMPORTANT: If the Input conceptually relates to any of the "Existing recent notes", append this exact text at the end of "corrected_text": '\\n\\n**Связанные заметки:** [[Name]]' (use the exact Name from the list).
 """
 
     try:
