@@ -33,7 +33,7 @@ cp .env.example .env
 ```bash
 В файле `.env` укажите:
 - `BOT_TOKEN`: Токен вашего бота от BotFather.
-- `REDIS_URL`: Адрес вашего Redis (для FSM состояний).
+- `REDIS_URL`: Адрес вашего Redis (для FSM состояний), если нету Redis будет использоваться MemoryStorage.
 - `S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY / S3_BUCKET_NAME`: Данные вашего S3
 - `PROXY_URL`: IP, Port, Login, Password
 - `ADMIN_ID`: Ваш ID в Telegram для получения дайджестов.

@@ -25,34 +25,37 @@ audio_client = AsyncOpenAI(
     http_client=external_http_client
 )
 
-AI_MODEL = os.getenv("AI_MODEL", "gemma3:4b")
+AI_MODEL = os.getenv("AI_MODEL", "gemma4:e2b")
 
 async def process_text(text: str, delay_callback=None, url_content: str = "", recent_notes: str = "") -> dict:
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    prompt = f"""You are a data parser. Output ONLY valid JSON.
+    prompt = f"""You are a precise data formatter. You output ONLY valid JSON.
+
 Date: {now_str}
 Input: {text}
-URL: {url_content}
 
 Existing recent notes in user's Obsidian:
 {recent_notes}
 
-{{
-"category": "Choose ONLY ONE: Finance, Ideas, Notes, Reminders",
-"tags": ["tag1", "tag2"],
-"corrected_text": "formatted markdown in Russian",
-"filename": "понятное_название_из_сути_заметки.md",
-"remind_time": "YYYY-MM-DD HH:MM or empty string",
-"expense_amount": float or 0
-}}
-
 RULES:
-1. "category": Must be one of the four: Finance, Ideas, Notes, Reminders. DO NOT list them all, pick only the best one.
-2. "tags": list of strings WITHOUT the # symbol.
-3. "filename": short, descriptive filename in Russian.
-4. NEVER leave "corrected_text" empty.
-5. IMPORTANT: If the Input conceptually relates to any of the "Existing recent notes", append this exact text at the end of "corrected_text": '\\n\\n**Связанные заметки:** [[Name]]' (use the exact Name from the list).
+1. You MUST first fill the "thought_process" field to analyze connections.
+2. "category": Pick ONLY ONE (Finance, Ideas, Notes, Reminders).
+3. "tags": Array of strings (NO #).
+4. "filename": Short, descriptive, STRICTLY IN RUSSIAN (e.g., "план_отпуска.md"). DO NOT use dates or English words in the filename.
+5. IF your "thought_process" found a deep thematic connection, you MUST end the "corrected_text" with exactly this syntax:
+\n\n**Связанные заметки:** [[Name_from_the_list]]
+
+CRITICAL EXAMPLE OF CORRECT OUTPUT:
+{{
+  "thought_process": "Input is about sunscreen. Recent notes list contains 'Отпуск_в_Турцию'. Both relate to summer holidays. I will link them.",
+  "category": "Reminders",
+  "tags": ["покупки", "отпуск"],
+  "corrected_text": "Не забыть купить крем от загара.\\n\\n**Связанные заметки:** [[Отпуск_в_Турцию]]",
+  "filename": "крем_от_загара.md",
+  "remind_time": "",
+  "expense_amount": 0
+}}
 """
 
     try:
@@ -161,12 +164,16 @@ Existing recent notes in user's Obsidian:
 {recent_notes}
 
 RULES:
-1. Output strictly in RUSSIAN.
-2. Format as a clean, structured note.
+1. Output strictly in RUSSIAN (Отвечай строго на РУССКОМ языке).
+2. Format as a clean, structured note (use ## headings, bullet points, and bold text for key terms).
 3. DO NOT generate Q&A, flashcards, or tests.
-4. IMPORTANT: If the text conceptually relates to any of the "Existing recent notes", add a section at the very end of the markdown:
-## Связанные заметки
-- [[Exact name of the note from the list]]
+4. Output ONLY the raw Markdown text. Do not add JSON or any introductory words.
+5. SEMANTIC LINKING (CRITICAL): Connect this text to "Existing recent notes" ONLY if they share a deep thematic meaning or specific entities (events, people, projects).If a strong thematic link exists to a note from "Existing recent notes", append this exact string to the end of "corrected_text":
+    \n\n**Связанные заметки:** [[Name]]
+   - DO NOT link notes just because they share words like "plan", "idea", "buy", "remind", "read".
+   - If there is a true thematic connection, add a section at the very end:
+   - CRITICAL: You MUST end the "corrected_text" immediately after the closing bracket "]]". 
+   - ANY text, explanations, or reasoning after "]]" is strictly forbidden.
 
 Text to format:
 {text[:3500]}"""
@@ -199,9 +206,12 @@ RULES:
 2. Format as a clean, structured note (use ## headings, bullet points, and bold text for key terms).
 3. DO NOT generate Q&A, flashcards, or tests.
 4. Output ONLY the raw Markdown text. Do not add JSON or any introductory words.
-5. IMPORTANT: If the text conceptually relates to any of the "Existing recent notes", add a section at the very end of the markdown:
-## Связанные заметки
-- [[Exact name of the note from the list]]
+5. SEMANTIC LINKING (CRITICAL): Connect this text to "Existing recent notes" ONLY if they share a deep thematic meaning or specific entities (events, people, projects).If a strong thematic link exists to a note from "Existing recent notes", append this exact string to the end of "corrected_text":
+    \n\n**Связанные заметки:** [[Name]]
+   - DO NOT link notes just because they share words like "plan", "idea", "buy", "remind", "read".
+   - If there is a true thematic connection, add a section at the very end:
+  - CRITICAL: You MUST end the "corrected_text" immediately after the closing bracket "]]". 
+   - ANY text, explanations, or reasoning after "]]" is strictly forbidden.
 
 Text:
 {text_chunk}"""
