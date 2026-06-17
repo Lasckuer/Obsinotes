@@ -30,7 +30,7 @@ AI_MODEL = os.getenv("AI_MODEL", "gemma4:e2b")
 async def process_text(text: str, delay_callback=None, url_content: str = "", recent_notes: str = "") -> dict:
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    prompt = f"""You are a precise data formatter. You output ONLY valid JSON.
+    prompt = f"""You are a precise data formatter for Obsidian. You output ONLY valid JSON.
 
 Date: {now_str}
 Input: {text}
@@ -38,22 +38,35 @@ Input: {text}
 Existing recent notes in user's Obsidian:
 {recent_notes}
 
-RULES:
-1. You MUST first fill the "thought_process" field to analyze connections.
-2. "category": Pick ONLY ONE (Finance, Ideas, Notes, Reminders).
-3. "tags": Array of strings (NO #).
-4. "filename": Short, descriptive, STRICTLY IN RUSSIAN. Capitalize the first letter and use SPACES instead of underscores (e.g., "План отпуска.md"). DO NOT use dates, underscores "_" or English words.
-5. IF your "thought_process" found a deep thematic connection, you MUST end the "corrected_text" with exactly this syntax:
-\n\n**Связанные заметки:** [[Name_from_the_list]]
+RULES FOR JSON FIELDS:
+1. "thought_process": You MUST use this field to think step-by-step BEFORE filling other fields.
+   - Step 1: Determine the intent. Is it an explicit request for an alarm, an expense, a creative thought, or just a plan/information?
+   - Step 2: Compare the input's core topic with the EXACT names in "Existing recent notes". Is there a direct logical connection or continuation?
+2. "category": Pick EXACTLY ONE based on Step 1:
+   - "Reminders": ONLY IF the user explicitly asks for an alert (e.g., "напомни", "каждый час") OR specifies a strict future time for a task.
+   - "Finance": ONLY IF money, purchases with prices, or budgets are mentioned.
+   - "Ideas": ONLY IF it's an abstract brainstorming concept or a distant dream.
+   - "Notes": DEFAULT category for everything else (everyday plans like "Надо купить билеты", facts, information, events).
+3. "tags": Array of strings related to the topic (NO #).
+4. "filename": Short, descriptive, STRICTLY IN RUSSIAN. Capitalize the first letter and use SPACES instead of underscores. DO NOT use "_".
+5. "corrected_text": 
+   - IF "category" is "Reminders": Rewrite as a DIRECT INSTRUCTION for the core action ONLY ("Тебе нужно..."). REMOVE all time markers and meta-requests like "напомни мне", "каждый час", "в 15:00". Example: "напомни каждый час разминать спину" -> "Тебе нужно размять спину!".
+   - IF "category" is "Notes", "Ideas", or "Finance": KEEP the original meaning and style. Do not make it a command. Just fix typos and format beautifully in Markdown.
+   - SEMANTIC LINKING: IF Step 2 found a strong, obvious logical connection (e.g., cause/effect, same project) to an EXISTING note, you MUST append this to the very end of the text: \n\n**Связанные заметки:** [[Exact_Name_From_List]]
+   - IF NO CONNECTION IS FOUND, do NOT add the "Связанные заметки" line at all.
+6. "remind_time": "YYYY-MM-DD HH:MM" if a specific time is requested, else empty string "".
+7. "recur_minutes": 60 if "every hour", 1440 if "every day", else 0.
+8. "expense_amount": Number if finance, else 0.
 
 CRITICAL EXAMPLE OF CORRECT OUTPUT:
 {{
-  "thought_process": "Input is about sunscreen. Recent notes list contains 'Отпуск в Турцию'. Both relate to summer holidays. I will link them.",
-  "category": "Reminders",
-  "tags": ["покупки", "отпуск"],
-  "corrected_text": "Не забыть купить крем от загара.\\n\\n**Связанные заметки:** [[Отпуск в Турцию]]",
-  "filename": "Крем от загара.md",
+  "thought_process": "Step 1: Input says 'Надо купить билеты в Турцию'. No explicit 'remind me' or time, so it's a general plan -> category 'Notes'. Step 2: Checking recent notes. I see 'Путешествие в Турцию'. There is a direct logical connection (buying tickets for the planned trip). I will link them.",
+  "category": "Notes",
+  "tags": ["путешествия", "покупки"],
+  "corrected_text": "Надо купить билеты в Турцию.\\n\\n**Связанные заметки:** [[Путешествие в Турцию]]",
+  "filename": "Билеты в Турцию.md",
   "remind_time": "",
+  "recur_minutes": 0,
   "expense_amount": 0
 }}
 """

@@ -9,9 +9,16 @@ async def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 text TEXT,
-                remind_time TIMESTAMP
+                remind_time TIMESTAMP,
+                recur_minutes INTEGER DEFAULT 0
             )
         """)
+        
+        try:
+            await db.execute("ALTER TABLE reminders ADD COLUMN recur_minutes INTEGER DEFAULT 0")
+        except:
+            pass
+
         await db.execute("""
             CREATE TABLE IF NOT EXISTS expenses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,19 +40,30 @@ async def init_db():
         """)
         await db.commit()
 
-async def add_reminder(user_id: int, text: str, remind_time: str):
+async def add_reminder(user_id: int, text: str, remind_time: str, recur_minutes: int = 0):
     async with aiosqlite.connect("database.db") as db:
-        await db.execute("INSERT INTO reminders (user_id, text, remind_time) VALUES (?, ?, ?)", (user_id, text, remind_time))
+        await db.execute(
+            "INSERT INTO reminders (user_id, text, remind_time, recur_minutes) VALUES (?, ?, ?, ?)", 
+            (user_id, text, remind_time, recur_minutes)
+        )
         await db.commit()
 
 async def get_due_reminders(current_time: str):
     async with aiosqlite.connect("database.db") as db:
-        async with db.execute("SELECT id, user_id, text FROM reminders WHERE remind_time <= ?", (current_time,)) as cursor:
+        async with db.execute(
+            "SELECT id, user_id, text, recur_minutes FROM reminders WHERE remind_time <= ?", 
+            (current_time,)
+        ) as cursor:
             return await cursor.fetchall()
 
 async def delete_reminder(reminder_id: int):
     async with aiosqlite.connect("database.db") as db:
         await db.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        await db.commit()
+
+async def update_reminder_time(r_id: int, next_time: str):
+    async with aiosqlite.connect("database.db") as db:
+        await db.execute("UPDATE reminders SET remind_time = ? WHERE id = ?", (next_time, r_id))
         await db.commit()
 
 async def add_expense(user_id: int, amount: float, comment: str):

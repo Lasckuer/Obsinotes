@@ -117,7 +117,7 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
     if len(text) > 1000:
         await processing_msg.edit_text("🧠 Пишу красивый конспект...")
         
-        recent_notes = await get_recent_notes_for_linking(10)
+        recent_notes = await get_recent_notes_for_linking(20)
         
         full_text = ""
         last_update_time = time.time()
@@ -168,7 +168,7 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
             await state.clear()
     else:
         await processing_msg.edit_text("🧠 Думаю...")
-        recent_notes = await get_recent_notes_for_linking(10)
+        recent_notes = await get_recent_notes_for_linking(20)
         processed = await process_text(text, delay_callback=None, url_content="", recent_notes=recent_notes)
         
         if not processed:
@@ -191,6 +191,10 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
         if not corrected_text or not corrected_text.strip():
             corrected_text = text
 
+        if category == "Reminders":
+            if "**Связанные заметки:**" in corrected_text:
+                corrected_text = corrected_text.split("**Связанные заметки:**")[0].strip()
+
         base_name = processed.get("filename", "").strip()
         if not base_name:
             base_name = f"заметка_{uuid.uuid4().hex[:4]}"
@@ -202,6 +206,15 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
         reminder_time = processed.get("remind_time") or processed.get("reminder_time")
         if reminder_time and not str(reminder_time).strip():
             reminder_time = None
+            
+        recur_minutes = processed.get("recur_minutes", 0)
+        try:
+            recur_minutes = int(recur_minutes)
+        except (ValueError, TypeError):
+            recur_minutes = 0
+            
+        if not reminder_time and (category == "Reminders" or recur_minutes > 0):
+            reminder_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         
         date_str = datetime.datetime.now().strftime('%d.%m.%Y')
         md_content = f"---\ntags: [{tags_str}]\ndate: {date_str}\n---\n\n{corrected_text}"
@@ -217,8 +230,10 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
             except:
                 display_time = reminder_time
                 
-            await add_reminder(message.from_user.id, corrected_text, reminder_time)
-            await processing_msg.edit_text(f"Напоминание на {display_time}. Файл: `{s3_folder}/{md_filename}`", parse_mode="Markdown")
+            await add_reminder(message.from_user.id, corrected_text, reminder_time, recur_minutes)
+            
+            recur_text = f" (повтор каждые {recur_minutes} мин)" if recur_minutes > 0 else ""
+            await processing_msg.edit_text(f"Напоминание на {display_time}{recur_text}. Файл: `{s3_folder}/{md_filename}`", parse_mode="Markdown")
         else:
             await processing_msg.edit_text(f"Сохранено в {s3_folder}: `{md_filename}`", parse_mode="Markdown")
             
@@ -245,7 +260,7 @@ async def handle_document(message: Message, state: FSMContext, bot):
 
     if text:
         await processing_msg.edit_text("🧠 Генерирую конспект...")
-        recent_notes = await get_recent_notes_for_linking(10)
+        recent_notes = await get_recent_notes_for_linking(20)
         
         full_text = ""
         last_update_time = time.time()

@@ -1,20 +1,29 @@
 import datetime
 import pytz
 from aiogram import Bot
-from app.database.db import get_due_reminders, delete_reminder, get_today_notes
+from app.database.db import get_due_reminders, delete_reminder, get_today_notes, update_reminder_time
 from app.handlers import messages
 from logger import logger, log_reminder_sent, log_reminder_error
 
 async def check_reminders(bot: Bot):
     tz = pytz.timezone('Europe/Moscow')
-    now = datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M")
+    now_dt = datetime.datetime.now(tz)
+    now_str = now_dt.strftime("%Y-%m-%d %H:%M")
     
-    reminders = await get_due_reminders(now)
+    reminders = await get_due_reminders(now_str)
     
-    for r_id, user_id, text in reminders:
+    for r_id, user_id, text, recur_minutes in reminders:
         try:
             await bot.send_message(user_id, f"🔔 **Напоминание:**\n{text}", parse_mode="Markdown")
-            await delete_reminder(r_id)
+            
+            if recur_minutes and int(recur_minutes) > 0:
+                next_dt = now_dt + datetime.timedelta(minutes=int(recur_minutes))
+                next_time_str = next_dt.strftime("%Y-%m-%d %H:%M")
+                await update_reminder_time(r_id, next_time_str)
+                logger.info(f"Цикличное напоминание {r_id} перенесено на {next_time_str}")
+            else:
+                await delete_reminder(r_id)
+                
             log_reminder_sent(r_id, user_id)
         except Exception as e:
             log_reminder_error(r_id, e)
