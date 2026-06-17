@@ -32,7 +32,7 @@ async def cmd_back(message: Message, state: FSMContext):
 @router.message(F.text == "📝 Отправить заметку")
 async def prompt_note(message: Message, state: FSMContext):
     await message.answer(
-        "Напиши текст, скинь ссылку, документ .docx, голосовое сообщение или фото:", 
+        "Напиши текст, скинь документ .docx, голосовое сообщение или фото:", 
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(NoteState.waiting_for_text)
