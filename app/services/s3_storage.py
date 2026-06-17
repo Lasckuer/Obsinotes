@@ -10,6 +10,10 @@ class S3StorageService:
         self.access_key = os.getenv("S3_ACCESS_KEY")
         self.secret_key = os.getenv("S3_SECRET_KEY")
         self.bucket_name = os.getenv("S3_BUCKET_NAME", "obsidian")
+        self._config = Config(
+            s3={'addressing_style': 'path'},
+            proxies={'http': None, 'https': None} 
+        )
 
     def _get_client(self):
         return self.session.client(
@@ -17,10 +21,7 @@ class S3StorageService:
             endpoint_url=self.endpoint_url,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
-            config=Config(
-                s3={'addressing_style': 'path'},
-                proxies={'http': None, 'https': None} 
-            )
+            config=self._config
         )
 
     async def init_folders(self):
@@ -31,23 +32,22 @@ class S3StorageService:
                 except Exception:
                     await s3.create_bucket(Bucket=self.bucket_name)
         except Exception as e:
-            log_llm_error(f"{e}")
+            log_s3_error(f"Init folders error: {e}")
 
-    async def upload_file(self, folder: str, filename: str, content):
-        key = f"{folder}/{filename}" if folder else filename
-        key = key.replace("//", "/")
+    async def upload_file(self, folder: str, filename: str, content) -> bool:
+        key = f"{folder.strip('/')}/{filename}" if folder else filename
         try:
             if isinstance(content, str):
                 content = content.encode('utf-8')
             async with self._get_client() as s3:
                 await s3.put_object(Bucket=self.bucket_name, Key=key, Body=content)
+            return True
         except Exception as e:
-            log_llm_error(f"{e}")
             log_s3_error(f"Не удалось загрузить файл {filename}: {e}")
-        return False
+            return False
 
     async def get_files(self, folder: str) -> list:
-        prefix = f"{folder}/" if folder else ""
+        prefix = f"{folder.strip('/')}/" if folder else ""
         files = []
         try:
             async with self._get_client() as s3:
@@ -56,9 +56,9 @@ class S3StorageService:
                     for item in result.get('Contents', []):
                         key = item['Key']
                         if key != prefix:
-                            files.append(key.replace(prefix, ""))
+                            files.append(key[len(prefix):])
         except Exception as e:
-            log_llm_error(f"{e}")
+            log_s3_error(f"Get files error: {e}")
         return files
 
     async def get_all_files(self) -> list:
@@ -72,26 +72,18 @@ class S3StorageService:
                         if not key.endswith('/'):
                             files.append(key)
         except Exception as e:
-            log_llm_error(f"{e}")
+            log_s3_error(f"Get all files error: {e}")
         return files
 
-    async def download_file(self, folder: str, filename: str) -> bytes:
-        key = f"{folder}/{filename}" if folder else filename
-        key = key.replace("//", "/")
-        try:
-            async with self._get_client() as s3:
-                response = await s3.get_object(Bucket=self.bucket_name, Key=key)
-                return await response['Body'].read()
-        except Exception as e:
-            log_llm_error(f"{e}")
-            log_s3_error(f"Не удалось загрузить файл {filename}: {e}")
-            return b""
-            
     async def download_file_by_key(self, key: str) -> bytes:
         try:
             async with self._get_client() as s3:
                 response = await s3.get_object(Bucket=self.bucket_name, Key=key)
                 return await response['Body'].read()
         except Exception as e:
-            log_llm_error(f"{e}")
+            log_s3_error(f"Download by key error {key}: {e}")
             return b""
+
+    async def download_file(self, folder: str, filename: str) -> bytes:
+        key = f"{folder.strip('/')}/{filename}" if folder else filename
+        return await self.download_file_by_key(key)
