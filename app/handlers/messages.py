@@ -196,7 +196,6 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
             base_name = f"заметка_{uuid.uuid4().hex[:4]}"
             
         md_filename = base_name if base_name.endswith('.md') else f"{base_name}.md"
-        md_filename = md_filename.replace(" ", "_")
         
         md_filename = await get_rephrased_filename(category, md_filename, text)
         
@@ -289,7 +288,6 @@ async def handle_document(message: Message, state: FSMContext, bot):
             s3_folder = f"TelegramBot/{category}"
 
             clean_name = message.document.file_name.replace(".docx", "").strip()
-            clean_name = clean_name.replace(" ", "_")
             fname = f"{clean_name}.md"
         
             fname = await get_rephrased_filename(category, fname, summary)

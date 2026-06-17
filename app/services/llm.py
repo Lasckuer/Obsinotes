@@ -42,17 +42,17 @@ RULES:
 1. You MUST first fill the "thought_process" field to analyze connections.
 2. "category": Pick ONLY ONE (Finance, Ideas, Notes, Reminders).
 3. "tags": Array of strings (NO #).
-4. "filename": Short, descriptive, STRICTLY IN RUSSIAN (e.g., "план_отпуска.md"). DO NOT use dates or English words in the filename.
+4. "filename": Short, descriptive, STRICTLY IN RUSSIAN. Capitalize the first letter and use SPACES instead of underscores (e.g., "План отпуска.md"). DO NOT use dates, underscores "_" or English words.
 5. IF your "thought_process" found a deep thematic connection, you MUST end the "corrected_text" with exactly this syntax:
 \n\n**Связанные заметки:** [[Name_from_the_list]]
 
 CRITICAL EXAMPLE OF CORRECT OUTPUT:
 {{
-  "thought_process": "Input is about sunscreen. Recent notes list contains 'Отпуск_в_Турцию'. Both relate to summer holidays. I will link them.",
+  "thought_process": "Input is about sunscreen. Recent notes list contains 'Отпуск в Турцию'. Both relate to summer holidays. I will link them.",
   "category": "Reminders",
   "tags": ["покупки", "отпуск"],
-  "corrected_text": "Не забыть купить крем от загара.\\n\\n**Связанные заметки:** [[Отпуск_в_Турцию]]",
-  "filename": "крем_от_загара.md",
+  "corrected_text": "Не забыть купить крем от загара.\\n\\n**Связанные заметки:** [[Отпуск в Турцию]]",
+  "filename": "Крем от загара.md",
   "remind_time": "",
   "expense_amount": 0
 }}
@@ -108,10 +108,10 @@ async def get_rephrased_filename(category: str, filename: str, original_text: st
                     break
             
             prompt = f"""Предыдущее название файла '{unique_filename}' уже занято. 
-Придумай ДРУГОЕ, новое короткое название для файла (на русском языке, без пробелов, расширение .md) на основе этого текста:
+Придумай ДРУГОЕ, новое короткое название для файла (строго на русском языке, используй ПРОБЕЛЫ вместо нижних подчеркиваний, расширение .md) на основе этого текста:
 '{original_text[:200]}'
 
-Выведи ТОЛЬКО название файла и ничего больше. Пример: новое_название.md"""
+Выведи ТОЛЬКО название файла и ничего больше. Пример: Новое название для заметки.md"""
             
             try:
                 response = await client.chat.completions.create(
@@ -119,11 +119,11 @@ async def get_rephrased_filename(category: str, filename: str, original_text: st
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.7
                 )
-                ai_name = response.choices[0].message.content.strip().replace(" ", "_")
+                ai_name = response.choices[0].message.content.strip()
                 unique_filename = ai_name if ai_name.endswith('.md') else f"{ai_name}.md"
             except Exception:
                 base, ext = os.path.splitext(unique_filename)
-                unique_filename = f"{base}_{uuid.uuid4().hex[:4]}{ext}"
+                unique_filename = f"{base} {uuid.uuid4().hex[:4]}{ext}"
                 
     return unique_filename
     
@@ -168,12 +168,8 @@ RULES:
 2. Format as a clean, structured note (use ## headings, bullet points, and bold text for key terms).
 3. DO NOT generate Q&A, flashcards, or tests.
 4. Output ONLY the raw Markdown text. Do not add JSON or any introductory words.
-5. SEMANTIC LINKING (CRITICAL): Connect this text to "Existing recent notes" ONLY if they share a deep thematic meaning or specific entities (events, people, projects).If a strong thematic link exists to a note from "Existing recent notes", append this exact string to the end of "corrected_text":
-    \n\n**Связанные заметки:** [[Name]]
-   - DO NOT link notes just because they share words like "plan", "idea", "buy", "remind", "read".
-   - If there is a true thematic connection, add a section at the very end:
-   - CRITICAL: You MUST end the "corrected_text" immediately after the closing bracket "]]". 
-   - ANY text, explanations, or reasoning after "]]" is strictly forbidden.
+5. SEMANTIC LINKING: Compare the text with "Existing recent notes". If there is a deep thematic connection, you MUST add a section at the very end of your response using exactly this syntax:
+\n\n**Связанные заметки:** [[Exact Name From The List]]
 
 Text to format:
 {text[:3500]}"""
@@ -206,12 +202,8 @@ RULES:
 2. Format as a clean, structured note (use ## headings, bullet points, and bold text for key terms).
 3. DO NOT generate Q&A, flashcards, or tests.
 4. Output ONLY the raw Markdown text. Do not add JSON or any introductory words.
-5. SEMANTIC LINKING (CRITICAL): Connect this text to "Existing recent notes" ONLY if they share a deep thematic meaning or specific entities (events, people, projects).If a strong thematic link exists to a note from "Existing recent notes", append this exact string to the end of "corrected_text":
-    \n\n**Связанные заметки:** [[Name]]
-   - DO NOT link notes just because they share words like "plan", "idea", "buy", "remind", "read".
-   - If there is a true thematic connection, add a section at the very end:
-  - CRITICAL: You MUST end the "corrected_text" immediately after the closing bracket "]]". 
-   - ANY text, explanations, or reasoning after "]]" is strictly forbidden.
+5. SEMANTIC LINKING: Compare the text with "Existing recent notes". If there is a deep thematic connection, you MUST add a section at the very end of your response using exactly this syntax:
+\n\n**Связанные заметки:** [[Exact Name From The List]]
 
 Text:
 {text_chunk}"""
