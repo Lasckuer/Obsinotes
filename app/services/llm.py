@@ -9,14 +9,13 @@ import asyncio
 from logger import log_llm_error
 
 proxy_url = os.getenv("PROXY_URL")
-http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
-
-external_http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else None
+external_http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else httpx.AsyncClient()
+internal_http_client = httpx.AsyncClient()
 
 client = AsyncOpenAI(
     api_key="ollama",
     base_url="https://api-ai.lkserv.ru/v1",
-    http_client=httpx.AsyncClient()
+    http_client=internal_http_client
 )
 
 audio_client = AsyncOpenAI(
@@ -26,6 +25,22 @@ audio_client = AsyncOpenAI(
 )
 
 AI_MODEL = os.getenv("AI_MODEL", "gemma4:e2b")
+
+async def _stream_generation(prompt: str, temperature: float, max_tokens: int, fallback_text: str):
+    try:
+        response = await client.chat.completions.create(
+            model=AI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True
+        )
+        async for chunk in response:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
+    except Exception as e:
+        log_llm_error(f"{e}")
+        yield fallback_text
 
 async def process_text(text: str, delay_callback=None, url_content: str = "", recent_notes: str = "") -> dict:
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -71,10 +86,10 @@ CRITICAL EXAMPLE OF CORRECT OUTPUT:
 }}
 """
 
+    if delay_callback:
+        asyncio.create_task(delay_callback())
+
     try:
-        if delay_callback:
-            asyncio.create_task(delay_callback())
-            
         response = await client.chat.completions.create(
             model=AI_MODEL,
             messages=[{"role": "user", "content": prompt}],
@@ -82,9 +97,7 @@ CRITICAL EXAMPLE OF CORRECT OUTPUT:
             temperature=0.1,
             max_tokens=800
         )
-        
-        raw_content = response.choices[0].message.content.strip()
-        return json.loads(raw_content)
+        return json.loads(response.choices[0].message.content.strip())
     except Exception as e:
         log_llm_error(f"{e}")
         return {}
@@ -93,16 +106,13 @@ async def transcribe_audio(filepath: str) -> str:
     try:
         with open(filepath, "rb") as f:
             file_bytes = f.read()
-            
-        filename = os.path.basename(filepath)
         
-        file_tuple = (filename, file_bytes, "audio/ogg")
+        file_tuple = (os.path.basename(filepath), file_bytes, "audio/ogg")
         
         response = await audio_client.audio.transcriptions.create(
             model="whisper-large-v3", 
             file=file_tuple
         )
-        
         return response.text
     except Exception as e:
         log_llm_error(f"Ошибка распознавания аудио: {e}")
@@ -139,9 +149,8 @@ async def get_rephrased_filename(category: str, filename: str, original_text: st
                 unique_filename = f"{base} {uuid.uuid4().hex[:4]}{ext}"
                 
     return unique_filename
-    
+
 async def stream_answer_question(question: str, context: str):
-    """Генерирует потоковый ответ на вопрос пользователя (эффект печати)"""
     prompt = f"""Ты — умный ИИ-ассистент. Ответь на вопрос пользователя, основываясь ТОЛЬКО на предоставленных ниже заметках.
 Если в заметках нет ответа на вопрос, честно скажи об этом.
 Отвечай строго на РУССКОМ языке, используй Markdown для красивого форматирования.
@@ -152,23 +161,10 @@ async def stream_answer_question(question: str, context: str):
 Вопрос пользователя: 
 {question}"""
 
-    try:
-        response = await client.chat.completions.create(
-            model=AI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=1000,
-            stream=True
-        )
-        
-        async for chunk in response:
-            if chunk.choices[0].delta.content is not None:
-                yield chunk.choices[0].delta.content
-                
-    except Exception as e:
-        log_llm_error(f"Ошибка в stream_answer_question: {e}")
-        yield "❌ Произошла ошибка при обращении к нейросети."
-        
+    fallback = "❌ Произошла ошибка при обращении к нейросети."
+    async for chunk in _stream_generation(prompt, 0.3, 1000, fallback):
+        yield chunk
+
 async def stream_process_examiner_text(text: str, recent_notes: str = ""):
     prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
 Process the following text and format it beautifully in Markdown.
@@ -187,23 +183,11 @@ RULES:
 Text to format:
 {text[:3500]}"""
 
-    try:
-        response = await client.chat.completions.create(
-            model=AI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=1500,
-            stream=True
-        )
-        async for chunk in response:
-            if chunk.choices[0].delta.content is not None:
-                yield chunk.choices[0].delta.content
-    except Exception as e:
-        log_llm_error(f"Ошибка в stream_process_examiner_text: {e}")
-        yield f"### Оригинальный текст (ошибка генерации красоты):\n\n{text}"
-        
+    fallback = f"### Оригинальный текст (ошибка генерации красоты):\n\n{text}"
+    async for chunk in _stream_generation(prompt, 0.2, 1500, fallback):
+        yield chunk
+
 async def stream_summarize_document(text: str, recent_notes: str = ""):
-    text_chunk = text[:3500]
     prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
 Process the following text from a document and format it beautifully in Markdown.
 
@@ -219,19 +203,8 @@ RULES:
 \n\n**Связанные заметки:** [[Exact Name From The List]]
 
 Text:
-{text_chunk}"""
+{text[:3500]}"""
 
-    try:
-        response = await client.chat.completions.create(
-            model=AI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=1500,
-            stream=True
-        )
-        async for chunk in response:
-            if chunk.choices[0].delta.content is not None:
-                yield chunk.choices[0].delta.content
-    except Exception as e:
-        log_llm_error(f"{e}")
-        yield f"### Оригинальный текст документа (ошибка генерации):\n\n{text}"
+    fallback = f"### Оригинальный текст документа (ошибка генерации):\n\n{text}"
+    async for chunk in _stream_generation(prompt, 0.2, 1500, fallback):
+        yield chunk

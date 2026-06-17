@@ -5,9 +5,10 @@ from app.database.db import get_due_reminders, delete_reminder, get_today_notes,
 from app.handlers import messages
 from logger import logger, log_reminder_sent, log_reminder_error, log_reminder_cycled
 
+MOSCOW_TZ = pytz.timezone('Europe/Moscow')
+
 async def check_reminders(bot: Bot):
-    tz = pytz.timezone('Europe/Moscow')
-    now_dt = datetime.datetime.now(tz)
+    now_dt = datetime.datetime.now(MOSCOW_TZ)
     now_str = now_dt.strftime("%Y-%m-%d %H:%M")
     
     reminders = await get_due_reminders(now_str)
@@ -37,8 +38,7 @@ async def daily_digest(bot: Bot, admin_id: int):
     if not notes:
         return
         
-    tz = pytz.timezone('Europe/Moscow')
-    today_str = datetime.datetime.now(tz).strftime("%d.%m.%Y")
+    today_str = datetime.datetime.now(MOSCOW_TZ).strftime("%d.%m.%Y")
     
     text = f"🌙 **Дайджест за {today_str}:**\n\n"
     for filename, category in notes:

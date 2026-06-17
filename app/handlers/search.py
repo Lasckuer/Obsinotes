@@ -16,6 +16,29 @@ class SearchAIState(StatesGroup):
     waiting_for_input = State()
     waiting_for_file_number = State()
 
+async def _stream_to_message(processing_msg: Message, stream_generator, status_prefix: str) -> str:
+    full_text = ""
+    last_update_time = time.time()
+    update_interval = 2.0
+    frames = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
+    frame_idx = 0
+
+    async for chunk in stream_generator:
+        full_text += chunk
+        current_time = time.time()
+        
+        if current_time - last_update_time >= update_interval:
+            try:
+                frame = frames[frame_idx % len(frames)]
+                status_text = f"{frame} **{status_prefix}**\n\nСгенерировано символов: `{len(full_text)}`"
+                await processing_msg.edit_text(status_text, parse_mode="Markdown")
+                frame_idx += 1
+            except TelegramBadRequest:
+                pass
+            last_update_time = current_time
+
+    return full_text.strip()
+
 @router.message(F.text == "🔍 Поиск / 🤖 ИИ")
 async def prompt_search_or_ai(message: Message, state: FSMContext):
     await message.answer(
@@ -35,45 +58,26 @@ async def handle_search_or_ai(message: Message, state: FSMContext):
     is_question = query.endswith("?") or query.lower().startswith(ai_triggers)
     
     if is_question:
-            status_msg = await message.answer("🤔 Изучаю заметки и формулирую ответ...")
-            context_text = await get_recent_context(limit=15)
-            
-            full_text = ""
-            last_update_time = time.time()
-            update_interval = 2.0
-            
-            frames = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
-            frame_idx = 0
-            
-            try:
-                async for chunk in stream_answer_question(query, context_text):
-                    full_text += chunk
-                    current_time = time.time()
-                    
-                    if current_time - last_update_time >= update_interval:
-                        try:
-                            frame = frames[frame_idx % len(frames)]
-                            status_text = f"{frame} **ИИ изучает твои заметки и пишет ответ...**\n\nСгенерировано символов: `{len(full_text)}`"
-                            await status_msg.edit_text(status_text, parse_mode="Markdown")
-                            frame_idx += 1
-                        except Exception as e:
-                            print(f"⚠️ Сетевой скачок при поиске (игнорируем): {e}")
-                            
-                        last_update_time = current_time
+        status_msg = await message.answer("🤔 Изучаю заметки и формулирую ответ...")
+        context_text = await get_recent_context(limit=15)
+        
+        try:
+            stream_gen = stream_answer_question(query, context_text)
+            full_text = await _stream_to_message(status_msg, stream_gen, "ИИ изучает твои заметки и пишет ответ...")
 
-                if full_text.strip():
-                    try:
-                        await status_msg.edit_text(full_text, parse_mode="Markdown")
-                    except TelegramBadRequest:
-                        await status_msg.edit_text(full_text)
-                else:
-                    await status_msg.edit_text("❌ Нейросеть вернула пустой ответ.")
-                    
-            except Exception as e:
-                await status_msg.edit_text(f"❌ Ошибка стриминга: {e}")
+            if full_text:
+                try:
+                    await status_msg.edit_text(full_text, parse_mode="Markdown")
+                except TelegramBadRequest:
+                    await status_msg.edit_text(full_text)
+            else:
+                await status_msg.edit_text("❌ Нейросеть вернула пустой ответ.")
                 
-            await message.answer("Готово! Вы вернулись в главное меню 🏠", reply_markup=get_main_keyboard())
-            await state.clear()
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Ошибка стриминга: {e}")
+            
+        await message.answer("Готово! Вы вернулись в главное меню 🏠", reply_markup=get_main_keyboard())
+        await state.clear()
         
     else:
         status_msg = await message.answer("🔍 Сканирую записи Obsidian... подожди немного.")
