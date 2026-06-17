@@ -25,7 +25,7 @@ from app.services.s3_storage import S3StorageService
 from app.keyboards.reply import get_main_keyboard
 
 from app.handlers import messages, search 
-from app.services.scheduler import check_reminders, daily_digest, auto_sync_job
+from app.handlers.scheduler import check_reminders, daily_digest, auto_sync_job
 
 from logger import (
     logger,

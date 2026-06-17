@@ -70,6 +70,9 @@ def log_redis_off_info():
     
 def log_redis_on_info():
     logger.info(f"Redis подключен и используется для хранения состояния бота...")
+    
+def log_reminder_cycled(r_id, next_time_str):
+    logger.info(f"Цикличное напоминание {r_id} перенесено на {next_time_str}")
 
 def log_reminder_error(r_id, error):
     logger.error(f"Ошибка при отправке напоминания {r_id}: {error}")

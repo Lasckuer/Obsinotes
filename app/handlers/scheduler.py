@@ -3,7 +3,7 @@ import pytz
 from aiogram import Bot
 from app.database.db import get_due_reminders, delete_reminder, get_today_notes, update_reminder_time
 from app.handlers import messages
-from logger import logger, log_reminder_sent, log_reminder_error
+from logger import logger, log_reminder_sent, log_reminder_error, log_reminder_cycled
 
 async def check_reminders(bot: Bot):
     tz = pytz.timezone('Europe/Moscow')
@@ -20,7 +20,7 @@ async def check_reminders(bot: Bot):
                 next_dt = now_dt + datetime.timedelta(minutes=int(recur_minutes))
                 next_time_str = next_dt.strftime("%Y-%m-%d %H:%M")
                 await update_reminder_time(r_id, next_time_str)
-                logger.info(f"Цикличное напоминание {r_id} перенесено на {next_time_str}")
+                log_reminder_cycled(r_id, next_time_str)
             else:
                 await delete_reminder(r_id)
                 
