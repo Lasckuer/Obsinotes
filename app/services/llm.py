@@ -151,36 +151,44 @@ async def get_rephrased_filename(category: str, filename: str, original_text: st
     return unique_filename
 
 async def stream_answer_question(question: str, context: str):
-    prompt = f"""Ты — умный ИИ-ассистент. Ответь на вопрос пользователя, основываясь ТОЛЬКО на предоставленных ниже заметках.
-Если в заметках нет ответа на вопрос, честно скажи об этом.
-Отвечай строго на РУССКОМ языке, используй Markdown для красивого форматирования.
+    prompt = f"""You are a precise and honest AI assistant. Answer the user's question based ONLY on the provided "User Notes".
 
-Заметки пользователя (контекст):
+RULES:
+1. Grounding: You MUST use ONLY the information found in the "User Notes". DO NOT use outside knowledge or invent facts.
+2. Missing Info: If the notes do not contain the answer, you MUST reply exactly with: "К сожалению, в ваших заметках нет информации об этом."
+3. Language: Output STRICTLY in RUSSIAN.
+4. Formatting: Use clean Markdown (bullet points, **bold** text for key entities).
+5. NO PREAMBLE: Start answering the question immediately. Do not say "Based on the notes" or "Here is the answer".
+
+User Notes (Context):
 {context[:3500]}
 
-Вопрос пользователя: 
+User Question: 
 {question}"""
 
     fallback = "❌ Произошла ошибка при обращении к нейросети."
-    async for chunk in _stream_generation(prompt, 0.3, 1000, fallback):
+    async for chunk in _stream_generation(prompt, 0.1, 1000, fallback): # Температуру лучше снизить до 0.1 для точности фактов
         yield chunk
 
 async def stream_process_examiner_text(text: str, recent_notes: str = ""):
-    prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
-Process the following text and format it beautifully in Markdown.
+    prompt = f"""You are an expert data structurer for Obsidian. Transform the raw text into a clean, readable Markdown note.
 
-Existing recent notes in user's Obsidian:
+RULES FOR FORMATTING:
+1. Language: Output STRICTLY in RUSSIAN.
+2. NO PREAMBLE: Start directly with the Markdown text. Do not output any introductory words.
+3. Structure: Use `##` for main headings, `-` for lists, and **bold** for key terms.
+4. Content: DO NOT generate Q&A, flashcards, or tests.
+
+CRITICAL RULE FOR SEMANTIC LINKING:
+- Look at the "Existing recent notes" list.
+- IF AND ONLY IF the raw text directly continues or heavily relates to an EXACT note name from that list, append the following template to the VERY END of your response:
+\n\n**Связанные заметки:**\n- [[Exact Name From The List]]
+- IF NO MATCHING NOTE IS FOUND, TERMINATE THE RESPONSE IMMEDIATELY. DO NOT WRITE "Связанные заметки", DO NOT WRITE ANYTHING ELSE.
+
+Existing recent notes:
 {recent_notes}
 
-RULES:
-1. Output strictly in RUSSIAN (Отвечай строго на РУССКОМ языке).
-2. Format as a clean, structured note (use ## headings, bullet points, and bold text for key terms).
-3. DO NOT generate Q&A, flashcards, or tests.
-4. Output ONLY the raw Markdown text. Do not add JSON or any introductory words.
-5. SEMANTIC LINKING: Compare the text with "Existing recent notes". If there is a deep thematic connection, you MUST add a section at the very end of your response using exactly this syntax:
-\n\n**Связанные заметки:** [[Exact Name From The List]]
-
-Text to format:
+Raw Text to format:
 {text[:3500]}"""
 
     fallback = f"### Оригинальный текст (ошибка генерации красоты):\n\n{text}"
@@ -188,21 +196,23 @@ Text to format:
         yield chunk
 
 async def stream_summarize_document(text: str, recent_notes: str = ""):
-    prompt = f"""You are an expert assistant helping to structure notes for Obsidian.
-Process the following text from a document and format it beautifully in Markdown.
+    prompt = f"""You are an expert analyst. Summarize and structure the following document text into a clean Obsidian note.
 
-Existing recent notes in user's Obsidian:
+RULES FOR FORMATTING:
+1. Language: Output STRICTLY in RUSSIAN.
+2. NO PREAMBLE: Start directly with the Markdown text.
+3. Structure: Extract the core ideas. Use `##` for key topics, `-` for bullet points, and **bold** for key terms.
+
+CRITICAL RULE FOR SEMANTIC LINKING:
+- Look at the "Existing recent notes" list.
+- IF AND ONLY IF this document directly belongs to the same project or topic as a note in that list, append this template to the VERY END of the note:
+\n\n**Связанные заметки:**\n- [[Exact Name From The List]]
+- IF THERE IS NO DIRECT MATCH, DO NOT ADD ANY LINKING SECTION AT ALL. STOP GENERATION IMMEDIATELY.
+
+Existing recent notes:
 {recent_notes}
 
-RULES:
-1. Output strictly in RUSSIAN (Отвечай строго на РУССКОМ языке).
-2. Format as a clean, structured note (use ## headings, bullet points, and bold text for key terms).
-3. DO NOT generate Q&A, flashcards, or tests.
-4. Output ONLY the raw Markdown text. Do not add JSON or any introductory words.
-5. SEMANTIC LINKING: Compare the text with "Existing recent notes". If there is a deep thematic connection, you MUST add a section at the very end of your response using exactly this syntax:
-\n\n**Связанные заметки:** [[Exact Name From The List]]
-
-Text:
+Document Text:
 {text[:3500]}"""
 
     fallback = f"### Оригинальный текст документа (ошибка генерации):\n\n{text}"
