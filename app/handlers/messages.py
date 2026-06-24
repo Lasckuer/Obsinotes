@@ -18,7 +18,7 @@ from app.services.llm import (
     stream_process_examiner_text, 
     stream_summarize_document, 
     transcribe_audio, 
-    
+    generate_semantic_filename
 )
 from app.services.s3_storage import S3StorageService
 from app.database.db import add_reminder, add_note_log, get_recent_notes_for_linking
@@ -29,6 +29,8 @@ storage = S3StorageService()
 
 class NoteState(StatesGroup):
     waiting_for_text = State()
+
+
 
 async def _stream_to_message(processing_msg: Message, stream_generator, status_prefix: str) -> str:
     full_text = ""
@@ -155,20 +157,20 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
             if not md_content:
                 md_content = text
                 
-            try:
-                await processing_msg.edit_text(md_content, parse_mode="Markdown")
-            except TelegramBadRequest:
-                await processing_msg.edit_text(md_content)
-                
             category = "Notes"
             s3_folder = f"TelegramBot/{category}"
-            raw_filename = f"note_{uuid.uuid4().hex[:4]}.md"
-            md_filename = await get_rephrased_filename(category, raw_filename, text)
+            
+            semantic_name = await generate_semantic_filename(md_content)
+            md_filename = await get_rephrased_filename(category, semantic_name, text)
             
             await storage.upload_file(s3_folder, md_filename, md_content.encode('utf-8'))
             await add_note_log(md_filename, s3_folder, "notes", md_content)
             
-            await message.reply(f"✅ Сохранен конспект в `{s3_folder}/{md_filename}`\n\nГотово! Вы вернулись в главное меню 🏠", parse_mode="Markdown", reply_markup=get_main_keyboard())
+            await processing_msg.edit_text(
+                f"Сохранен конспект в `{s3_folder}/{md_filename}`\n\nГотово! Вы вернулись в главное меню 🏠",
+                parse_mode="Markdown",
+                reply_markup=get_main_keyboard()
+            )
             await state.clear()
         except Exception as e:
             await processing_msg.edit_text(f"❌ Ошибка: {e}")
@@ -275,21 +277,21 @@ async def handle_document(message: Message, state: FSMContext, bot):
             tags_str = "конспект, документ"
             date_str = datetime.datetime.now().strftime('%d.%m.%Y')
             final_md = f"---\ntags: [{tags_str}]\ndate: {date_str}\n---\n\n{summary}"
-            
-            try:
-                await processing_msg.edit_text(final_md, parse_mode="Markdown")
-            except TelegramBadRequest:
-                await processing_msg.edit_text(final_md)
                 
             category = "Notes"
             s3_folder = f"TelegramBot/{category}"
-            clean_name = message.document.file_name.replace(".docx", "").strip()
-            fname = await get_rephrased_filename(category, f"{clean_name}.md", summary)
+            
+            semantic_name = await generate_semantic_filename(summary)
+            fname = await get_rephrased_filename(category, semantic_name, summary)
 
             await storage.upload_file(s3_folder, fname, final_md.encode('utf-8'))
             await add_note_log(fname, s3_folder, tags_str, summary)
             
-            await message.answer(f"✅ Документ законспектирован в `{s3_folder}/{fname}`\n\nГотово! Вы вернулись в главное меню 🏠", parse_mode="Markdown", reply_markup=get_main_keyboard())
+            await processing_msg.edit_text(
+                f"Сохранен конспект в `{s3_folder}/{fname}`\n\nГотово! Вы вернулись в главное меню 🏠", 
+                parse_mode="Markdown", 
+                reply_markup=get_main_keyboard()
+            )
         except Exception as e:
             await processing_msg.edit_text(f"❌ Ошибка стриминга: {e}")
     else:

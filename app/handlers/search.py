@@ -20,7 +20,7 @@ async def _stream_to_message(processing_msg: Message, stream_generator, status_p
     full_text = ""
     last_update_time = time.time()
     update_interval = 2.0
-    frames = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
+    frames = ["🌘", "🌗", "🌖", "🌕", "🌔", "🌓", "🌒", "🌑"]
     frame_idx = 0
 
     async for chunk in stream_generator:

@@ -150,6 +150,26 @@ async def get_rephrased_filename(category: str, filename: str, original_text: st
                 
     return unique_filename
 
+async def generate_semantic_filename(text_content: str) -> str:
+    prompt = f"""Придумай короткое, емкое и осмысленное название для файла (строго на русском языке, используй обычные пробелы вместо нижних подчеркиваний) на основе следующего текста:
+'{text_content[:600]}'
+
+Выведи ТОЛЬКО название файла с расширением .md в конце и больше ничего. Пример: Настройка сервера Linux.md"""
+    try:
+        response = await client.chat.completions.create(
+            model=AI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4
+        )
+        ai_name = response.choices[0].message.content.strip()
+        ai_name = ai_name.replace('"', '').replace("'", "").replace("`", "").strip()
+        if not ai_name.endswith('.md'):
+            ai_name += '.md'
+        return ai_name
+    except Exception as e:
+        print(f"⚠️ Не удалось сгенерировать имя файла через LLM: {e}")
+        return f"note_{uuid.uuid4().hex[:4]}.md"
+
 async def stream_answer_question(question: str, context: str):
     prompt = f"""You are a precise and honest AI assistant. Answer the user's question based ONLY on the provided "User Notes".
 
