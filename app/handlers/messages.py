@@ -167,8 +167,12 @@ async def process_note_text(message: Message, state: FSMContext, text: str, proc
             await add_note_log(md_filename, s3_folder, "notes", md_content)
             
             await processing_msg.edit_text(
-                f"Сохранен конспект в `{s3_folder}/{md_filename}`\n\nГотово! Вы вернулись в главное меню 🏠",
-                parse_mode="Markdown",
+                f"Сохранен конспект в `{s3_folder}/{md_filename}`",
+                parse_mode="Markdown"
+            )
+            await state.clear()
+            await message.answer(
+                "Готово! Вы вернулись в главное меню 🏠", 
                 reply_markup=get_main_keyboard()
             )
             await state.clear()
@@ -288,8 +292,12 @@ async def handle_document(message: Message, state: FSMContext, bot):
             await add_note_log(fname, s3_folder, tags_str, summary)
             
             await processing_msg.edit_text(
-                f"Сохранен конспект в `{s3_folder}/{fname}`\n\nГотово! Вы вернулись в главное меню 🏠", 
-                parse_mode="Markdown", 
+                f"Сохранен конспект в `{s3_folder}/{fname}`", 
+                parse_mode="Markdown"
+            )
+            await state.clear()
+            await message.answer(
+                "Готово! Вы вернулись в главное меню 🏠", 
                 reply_markup=get_main_keyboard()
             )
         except Exception as e:
