@@ -45,46 +45,41 @@ async def _stream_generation(prompt: str, temperature: float, max_tokens: int, f
 async def process_text(text: str, delay_callback=None, url_content: str = "", recent_notes: str = "") -> dict:
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    prompt = f"""You are a precise data formatter for Obsidian. You output ONLY valid JSON.
+    prompt = f"""You are a strict data formatter for Obsidian. You output ONLY valid JSON.
+Never wrap the output in markdown code blocks like ```json.
 
 Date: {now_str}
 Input: {text}
 
-Existing recent notes in user's Obsidian:
+Existing recent notes list (Use EXACT names for linking):
 {recent_notes}
 
 RULES FOR JSON FIELDS:
-1. "thought_process": You MUST use this field to think step-by-step BEFORE filling other fields.
-   - Step 1: Determine the intent. Is it an explicit request for an alarm, an expense, a creative thought, or just a plan/information?
-   - Step 2: Compare the input's core topic with the EXACT names in "Existing recent notes". Is there a direct logical connection or continuation?
-2. "category": Pick EXACTLY ONE based on Step 1:
-   - "Reminders": ONLY IF the user explicitly asks for an alert (e.g., "напомни", "каждый час") OR specifies a strict future time for a task.
-   - "Finance": ONLY IF money, purchases with prices, or budgets are mentioned.
-   - "Ideas": ONLY IF it's an abstract brainstorming concept or a distant dream.
-   - "Notes": DEFAULT category for everything else (everyday plans like "Надо купить билеты", facts, information, events).
+1. "thought_process": Write a single sentence explaining the chosen category and if a semantic link was found.
+2. "category": "Reminders", "Finance", "Ideas", or "Notes" (Default for plans, facts, info).
 3. "tags": Array of strings related to the topic (NO #).
-4. "filename": Short, descriptive, STRICTLY IN RUSSIAN. Capitalize the first letter and use SPACES instead of underscores. DO NOT use "_".
-5. "corrected_text": 
-   - IF "category" is "Reminders": Rewrite as a DIRECT INSTRUCTION for the core action ONLY ("Тебе нужно..."). REMOVE all time markers and meta-requests like "напомни мне", "каждый час", "в 15:00". Example: "напомни каждый час разминать спину" -> "Тебе нужно размять спину!".
-   - IF "category" is "Notes", "Ideas", or "Finance": KEEP the original meaning and style. Do not make it a command. Just fix typos and format beautifully in Markdown.
-   - SEMANTIC LINKING: IF Step 2 found a strong, obvious logical connection (e.g., cause/effect, same project) to an EXISTING note, you MUST append this to the very end of the text: \n\n**Связанные заметки:** [[Exact_Name_From_List]]
-   - IF NO CONNECTION IS FOUND, do NOT add the "Связанные заметки" line at all.
-6. "remind_time": "YYYY-MM-DD HH:MM" if a specific time is requested, else empty string "".
-7. "recur_minutes": 60 if "every hour", 1440 if "every day", else 0.
-8. "expense_amount": Number if finance, else 0.
+4. "filename": Short descriptive name in Russian. 
+   - CRITICAL: Must start with a CAPITAL LETTER.
+   - CRITICAL: Use regular spaces only. DO NOT use underscores "_".
+   - Must end with ".md".
+5. "corrected_text": Original meaning with fixed typos in Markdown.
+   - SEMANTIC LINKING: Check the "Existing recent notes list". If the input directly continues, relates to, or mentions a topic from that list, you MUST append this exact markdown to the very end of the text: \\n\\n**Связанные заметки:** [[Exact_Name_From_List]]
+   - If no strong connection is found, DO NOT add the block.
+6. "remind_time": "YYYY-MM-DD HH:MM" or "".
+7. "recur_minutes": 60, 1440, or 0.
+8. "expense_amount": Number or 0.
 
-CRITICAL EXAMPLE OF CORRECT OUTPUT:
+OUTPUT FORMAT EXAMPLE:
 {{
-  "thought_process": "Step 1: Input says 'Надо купить билеты в Турцию'. No explicit 'remind me' or time, so it's a general plan -> category 'Notes'. Step 2: Checking recent notes. I see 'Путешествие в Турцию'. There is a direct logical connection (buying tickets for the planned trip). I will link them.",
+  "thought_process": "Input is about server setup. Found matching note 'Домашний сервер'. Adding link.",
   "category": "Notes",
-  "tags": ["путешествия", "покупки"],
-  "corrected_text": "Надо купить билеты в Турцию.\\n\\n**Связанные заметки:** [[Путешествие в Турцию]]",
-  "filename": "Билеты в Турцию.md",
+  "tags": ["linux", "сервер"],
+  "filename": "Настройка сети на сервере.md",
+  "corrected_text": "Нужно настроить проброс портов на роутере.\\n\\n**Связанные заметки:** [[Домашний сервер]]",
   "remind_time": "",
   "recur_minutes": 0,
   "expense_amount": 0
-}}
-"""
+}}"""
 
     if delay_callback:
         asyncio.create_task(delay_callback())
@@ -134,7 +129,14 @@ async def get_rephrased_filename(category: str, filename: str, original_text: st
 Придумай ДРУГОЕ, новое короткое название для файла (строго на русском языке, используй ПРОБЕЛЫ вместо нижних подчеркиваний, расширение .md) на основе этого текста:
 '{original_text[:200]}'
 
-Выведи ТОЛЬКО название файла и ничего больше. Пример: Новое название для заметки.md"""
+СТРОГИЕ ПРАВИЛА:
+1. Выведи ТОЛЬКО название файла с расширением .md в конце. Никаких вводных слов, кавычек или пояснений.
+2. Язык: Строго русский.
+3. Регистр: Первая буква названия ОБЯЗАТЕЛЬНО должна быть ЗАГЛАВНОЙ (Большой).
+4. Символы: Используй только обычные пробелы. ЗАПРЕЩЕНО использовать нижнее подчеркивание "_" вместо пробелов.
+
+Пример правильного ответа:
+Умный дом и автоматизация.md"""
             
             try:
                 response = await client.chat.completions.create(
@@ -151,10 +153,19 @@ async def get_rephrased_filename(category: str, filename: str, original_text: st
     return unique_filename
 
 async def generate_semantic_filename(text_content: str) -> str:
-    prompt = f"""Придумай короткое, емкое и осмысленное название для файла (строго на русском языке, используй обычные пробелы вместо нижних подчеркиваний) на основе следующего текста:
+    prompt = f"""Придумай короткое, емкое название для файла на основе текста.
+
+Текст:
 '{text_content[:600]}'
 
-Выведи ТОЛЬКО название файла с расширением .md в конце и больше ничего. Пример: Настройка сервера Linux.md"""
+СТРОГИЕ ПРАВИЛА:
+1. Выведи ТОЛЬКО название файла с расширением .md в конце. Никаких вводных слов, кавычек или пояснений.
+2. Язык: Строго русский.
+3. Регистр: Первая буква названия ОБЯЗАТЕЛЬНО должна быть ЗАГЛАВНОЙ (Большой).
+4. Символы: Используй только обычные пробелы. ЗАПРЕЩЕНО использовать нижнее подчеркивание "_" вместо пробелов.
+
+Пример правильного ответа:
+Умный дом и автоматизация.md"""
     try:
         response = await client.chat.completions.create(
             model=AI_MODEL,
@@ -201,9 +212,9 @@ RULES FOR FORMATTING:
 
 CRITICAL RULE FOR SEMANTIC LINKING:
 - Look at the "Existing recent notes" list.
-- IF AND ONLY IF the raw text directly continues or heavily relates to an EXACT note name from that list, append the following template to the VERY END of your response:
+- If and only if this text directly relates to an EXACT note name from that list, append the following section to the VERY END of your markdown output:
 \n\n**Связанные заметки:**\n- [[Exact Name From The List]]
-- IF NO MATCHING NOTE IS FOUND, TERMINATE THE RESPONSE IMMEDIATELY. DO NOT WRITE "Связанные заметки", DO NOT WRITE ANYTHING ELSE.
+- If no matching note is found in the list, simply finish the text normally. Do NOT add any linking section.
 
 Existing recent notes:
 {recent_notes}
@@ -225,9 +236,9 @@ RULES FOR FORMATTING:
 
 CRITICAL RULE FOR SEMANTIC LINKING:
 - Look at the "Existing recent notes" list.
-- IF AND ONLY IF this document directly belongs to the same project or topic as a note in that list, append this template to the VERY END of the note:
+- If and only if this text directly relates to an EXACT note name from that list, append the following section to the VERY END of your markdown output:
 \n\n**Связанные заметки:**\n- [[Exact Name From The List]]
-- IF THERE IS NO DIRECT MATCH, DO NOT ADD ANY LINKING SECTION AT ALL. STOP GENERATION IMMEDIATELY.
+- If no matching note is found in the list, simply finish the text normally. Do NOT add any linking section.
 
 Existing recent notes:
 {recent_notes}
