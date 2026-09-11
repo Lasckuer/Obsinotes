@@ -24,7 +24,7 @@ audio_client = AsyncOpenAI(
     http_client=external_http_client
 )
 
-AI_MODEL = os.getenv("AI_MODEL", "qwen2.5:3b-instruct-q4_K_M")
+AI_MODEL = os.getenv("AI_MODEL", "gemma4:e2b")
 
 async def _stream_generation(prompt: str, temperature: float, max_tokens: int, fallback_text: str):
     try:
