@@ -12,3 +12,7 @@ aioboto3
 botocore
 pytz
 redis
+pydantic
+pytest
+pytest-asyncio
+pytest-mock

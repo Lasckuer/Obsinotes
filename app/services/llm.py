@@ -1,54 +1,122 @@
 import uuid
-import aiosqlite
-from openai import AsyncOpenAI
-import httpx
 import json
 import os
+import re
 import datetime
 import asyncio
-from logger import log_llm_error
+from typing import Optional, Dict, Any, AsyncGenerator
 
-proxy_url = os.getenv("PROXY_URL")
-external_http_client = httpx.AsyncClient(proxy=proxy_url) if proxy_url else httpx.AsyncClient()
-internal_http_client = httpx.AsyncClient()
+import httpx
+from openai import AsyncOpenAI
 
-client = AsyncOpenAI(
-    api_key="ollama",
-    base_url="https://api-ai.lkserv.ru/v1",
-    http_client=internal_http_client
-)
+from app.config import get_settings
+from app.database.db import note_exists
+from logger import log_llm_error, logger
 
-audio_client = AsyncOpenAI(
-    api_key=os.getenv("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1",
-    http_client=external_http_client
-)
+_internal_http_client: Optional[httpx.AsyncClient] = None
+_external_http_client: Optional[httpx.AsyncClient] = None
+_client: Optional[AsyncOpenAI] = None
+_audio_client: Optional[AsyncOpenAI] = None
 
-AI_MODEL = os.getenv("AI_MODEL", "gemma4:e2b")
+def get_llm_client() -> AsyncOpenAI:
+    global _client, _internal_http_client
+    if _client is None:
+        settings = get_settings()
+        _internal_http_client = httpx.AsyncClient(timeout=60.0)
+        _client = AsyncOpenAI(
+            api_key=settings.AI_API_KEY,
+            base_url=settings.AI_BASE_URL,
+            http_client=_internal_http_client
+        )
+    return _client
 
-async def _stream_generation(prompt: str, temperature: float, max_tokens: int, fallback_text: str):
+def get_audio_client() -> Optional[AsyncOpenAI]:
+    global _audio_client, _external_http_client
+    if _audio_client is None:
+        settings = get_settings()
+        if not settings.GROQ_API_KEY:
+            return None
+        proxy = settings.PROXY_URL if settings.PROXY_URL else None
+        _external_http_client = httpx.AsyncClient(proxy=proxy, timeout=60.0)
+        _audio_client = AsyncOpenAI(
+            api_key=settings.GROQ_API_KEY,
+            base_url=settings.GROQ_BASE_URL,
+            http_client=_external_http_client
+        )
+    return _audio_client
+
+async def close_llm_clients():
+    """Gracefully closes persistent HTTP clients."""
+    global _client, _audio_client, _internal_http_client, _external_http_client
+    if _internal_http_client and not _internal_http_client.is_closed:
+        await _internal_http_client.aclose()
+    if _external_http_client and not _external_http_client.is_closed:
+        await _external_http_client.aclose()
+    _client = None
+    _audio_client = None
+    _internal_http_client = None
+    _external_http_client = None
+
+def parse_json_safely(raw_text: str) -> Dict[str, Any]:
+    """
+    Robust JSON parser for LLM outputs. Strips Markdown codeblocks and extracts
+    the outermost JSON object if present.
+    """
+    cleaned = raw_text.strip()
+    # Strip markdown fences if present
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = cleaned.strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt to extract first JSON object {...}
+    match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    return {}
+
+async def _stream_generation(prompt: str, temperature: float, max_tokens: int, fallback_text: str) -> AsyncGenerator[str, None]:
+    client = get_llm_client()
+    settings = get_settings()
     try:
         response = await client.chat.completions.create(
-            model=AI_MODEL,
+            model=settings.AI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
             max_tokens=max_tokens,
             stream=True
         )
         async for chunk in response:
-            if chunk.choices[0].delta.content is not None:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content is not None:
                 yield chunk.choices[0].delta.content
     except Exception as e:
         log_llm_error(f"{e}")
         yield fallback_text
 
-async def process_text(text: str, delay_callback=None, url_content: str = "", recent_notes: str = "") -> dict:
+async def process_text(
+    text: str,
+    delay_callback=None,
+    url_content: str = "",
+    recent_notes: str = ""
+) -> Dict[str, Any]:
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+    settings = get_settings()
+
+    url_section = f"\n\nExtracted content from linked URL:\n{url_content[:2000]}" if url_content else ""
+
     prompt = f"""You are a precise data formatter for Obsidian. You output ONLY valid JSON.
 
 Date: {now_str}
-Input: {text}
+Input: {text}{url_section}
 
 Existing recent notes in user's Obsidian:
 {recent_notes}
@@ -86,78 +154,105 @@ CRITICAL EXAMPLE OF CORRECT OUTPUT:
 }}
 """
 
+    delay_task = None
     if delay_callback:
-        asyncio.create_task(delay_callback())
+        async def _delayed_trigger():
+            await asyncio.sleep(4.0)
+            try:
+                await delay_callback()
+            except Exception:
+                pass
+        delay_task = asyncio.create_task(_delayed_trigger())
 
+    client = get_llm_client()
     try:
         response = await client.chat.completions.create(
-            model=AI_MODEL,
+            model=settings.AI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=400
+            max_tokens=450
         )
-        return json.loads(response.choices[0].message.content.strip())
+        content = response.choices[0].message.content or ""
+        return parse_json_safely(content)
     except Exception as e:
         log_llm_error(f"{e}")
         return {}
+    finally:
+        if delay_task and not delay_task.done():
+            delay_task.cancel()
 
 async def transcribe_audio(filepath: str) -> str:
+    audio_client = get_audio_client()
+    if not audio_client:
+        logger.warning("GROQ_API_KEY не установлен. Транскрибация аудио недоступна.")
+        return ""
+
+    settings = get_settings()
     try:
         with open(filepath, "rb") as f:
             file_bytes = f.read()
-        
+
         file_tuple = (os.path.basename(filepath), file_bytes, "audio/ogg")
-        
         response = await audio_client.audio.transcriptions.create(
-            model="whisper-large-v3", 
+            model=settings.GROQ_MODEL,
             file=file_tuple
         )
-        return response.text
+        return response.text or ""
     except Exception as e:
         log_llm_error(f"Ошибка распознавания аудио: {e}")
         return ""
 
-async def get_rephrased_filename(category: str, filename: str, original_text: str) -> str:
-    unique_filename = filename
-    
-    async with aiosqlite.connect("database.db") as db:
-        while True:
-            async with db.execute(
-                "SELECT 1 FROM notes_log WHERE filename = ? AND category LIKE ?", 
-                (unique_filename, f"%{category}")
-            ) as cursor:
-                if not await cursor.fetchone():
-                    break
-            
-            prompt = f"""Предыдущее название файла '{unique_filename}' уже занято. 
+async def get_rephrased_filename(category: str, filename: str, original_text: str, max_attempts: int = 3) -> str:
+    """
+    Ensures filename is unique within category. If duplicate exists, asks LLM
+    to generate an alternative name up to max_attempts, then falls back to a unique timestamp/uuid suffix.
+    """
+    unique_filename = filename if filename.endswith('.md') else f"{filename}.md"
+    settings = get_settings()
+    client = get_llm_client()
+
+    for attempt in range(max_attempts):
+        exists = await note_exists(unique_filename, category)
+        if not exists:
+            return unique_filename
+
+        prompt = f"""Предыдущее название файла '{unique_filename}' уже занято. 
 Придумай ДРУГОЕ, новое короткое название для файла (строго на русском языке, используй ПРОБЕЛЫ вместо нижних подчеркиваний, расширение .md) на основе этого текста:
 '{original_text[:200]}'
 
 Выведи ТОЛЬКО название файла и ничего больше. Пример: Новое название для заметки.md"""
-            
-            try:
-                response = await client.chat.completions.create(
-                    model=AI_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.7
-                )
-                ai_name = response.choices[0].message.content.strip()
-                unique_filename = ai_name if ai_name.endswith('.md') else f"{ai_name}.md"
-            except Exception:
-                base, ext = os.path.splitext(unique_filename)
-                unique_filename = f"{base} {uuid.uuid4().hex[:4]}{ext}"
-                
+
+        try:
+            response = await client.chat.completions.create(
+                model=settings.AI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7
+            )
+            ai_name = response.choices[0].message.content.strip()
+            ai_name = ai_name.replace('"', '').replace("'", "").replace("`", "").strip()
+            unique_filename = ai_name if ai_name.endswith('.md') else f"{ai_name}.md"
+        except Exception as e:
+            logger.warning(f"Ошибка запроса нового имени файла: {e}")
+            break
+
+    # If still exists after max attempts, apply deterministic unique suffix
+    if await note_exists(unique_filename, category):
+        base, ext = os.path.splitext(unique_filename)
+        unique_filename = f"{base} {uuid.uuid4().hex[:4]}{ext}"
+
     return unique_filename
 
 async def generate_semantic_filename(text_content: str) -> str:
+    settings = get_settings()
+    client = get_llm_client()
     prompt = f"""Придумай короткое, емкое и осмысленное название для файла (строго на русском языке, используй обычные пробелы вместо нижних подчеркиваний) на основе следующего текста:
 '{text_content[:600]}'
 
 Выведи ТОЛЬКО название файла с расширением .md в конце и больше ничего. Пример: Настройка сервера Linux.md"""
     try:
         response = await client.chat.completions.create(
-            model=AI_MODEL,
+            model=settings.AI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4
         )
@@ -167,10 +262,10 @@ async def generate_semantic_filename(text_content: str) -> str:
             ai_name += '.md'
         return ai_name
     except Exception as e:
-        print(f"⚠️ Не удалось сгенерировать имя файла через LLM: {e}")
+        logger.warning(f"Не удалось сгенерировать имя файла через LLM: {e}")
         return f"note_{uuid.uuid4().hex[:4]}.md"
 
-async def stream_answer_question(question: str, context: str):
+async def stream_answer_question(question: str, context: str) -> AsyncGenerator[str, None]:
     prompt = f"""You are a precise and honest AI assistant. Answer the user's question based ONLY on the provided "User Notes".
 
 RULES:
@@ -190,7 +285,7 @@ User Question:
     async for chunk in _stream_generation(prompt, 0.1, 1000, fallback):
         yield chunk
 
-async def stream_process_examiner_text(text: str, recent_notes: str = ""):
+async def stream_process_examiner_text(text: str, recent_notes: str = "") -> AsyncGenerator[str, None]:
     prompt = f"""You are an expert data structurer for Obsidian. Transform the raw text into a clean, readable Markdown note.
 
 RULES FOR FORMATTING:
@@ -211,11 +306,11 @@ Existing recent notes:
 Raw Text to format:
 {text[:3500]}"""
 
-    fallback = f"### Оригинальный текст (ошибка генерации красоты):\n\n{text}"
+    fallback = f"### Оригинальный текст (ошибка генерации):\n\n{text}"
     async for chunk in _stream_generation(prompt, 0.2, 1200, fallback):
         yield chunk
 
-async def stream_summarize_document(text: str, recent_notes: str = ""):
+async def stream_summarize_document(text: str, recent_notes: str = "") -> AsyncGenerator[str, None]:
     prompt = f"""You are an expert analyst. Summarize and structure the following document text into a clean Obsidian note.
 
 RULES FOR FORMATTING:

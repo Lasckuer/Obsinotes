@@ -48,7 +48,12 @@ source venv/bin/activate  # Для Linux/macOS
 pip install -r requirements.txt
 ```
 
-### 4. Запуск бота
+### 4. Запуск тестов
+```bash
+pytest
+```
+
+### 5. Запуск бота
 ```bash
 python main.py
 ```
