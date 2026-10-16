@@ -136,3 +136,180 @@ async def test_recent_context_and_linking(test_db: DatabaseManager):
     linking = await test_db.get_recent_notes_for_linking(limit=5)
     assert "- [[Вторая заметка]]: Второе содержимое..." in linking
     assert "- [[Первая заметка]]: Первое содержимое..." in linking
+
+@pytest.mark.asyncio
+async def test_recent_notes_for_linking_cleans_frontmatter(test_db: DatabaseManager):
+    content_with_frontmatter = """---
+tags: [ai, obsidian]
+date: 2026-10-15
+---
+
+Чистый текст заметки о нейросетях и знаниях."""
+
+    content_with_crlf = "---\r\ntags: [crlf]\r\ndate: 2026-10-15\r\n---\r\n\r\nТекст с Windows переводами строк."
+
+    content_with_bom = "\ufeff---\ntags: [bom]\ndate: 2026-10-15\n---\n\nТекст заметки с UTF-8 BOM."
+
+    await test_db.add_note_log(
+        filename="Нейросети.md",
+        category="Notes",
+        tags="ai",
+        content=content_with_frontmatter
+    )
+    await test_db.add_note_log(
+        filename="Windows.md",
+        category="Notes",
+        tags="crlf",
+        content=content_with_crlf
+    )
+    await test_db.add_note_log(
+        filename="BOM.md",
+        category="Notes",
+        tags="bom",
+        content=content_with_bom
+    )
+
+    linking = await test_db.get_recent_notes_for_linking(limit=5)
+    assert "tags: [ai" not in linking
+    assert "date: 2026-10-15" not in linking
+    assert "tags: [bom" not in linking
+    assert "Чистый текст заметки о нейросетях" in linking
+    assert "Текст с Windows переводами строк" in linking
+    assert "Текст заметки с UTF-8 BOM" in linking
+
+@pytest.mark.asyncio
+async def test_note_exists_root_isolation(test_db: DatabaseManager):
+    # File exists in a subfolder
+    await test_db.add_note_log(
+        filename="SpecificNote.md",
+        category="TelegramBot/Notes",
+        tags="",
+        content="Subfolder content"
+    )
+
+    # Checking if it exists in root ("") should return False
+    exists_in_root = await test_db.note_exists("SpecificNote.md", "")
+    assert exists_in_root is False
+
+    # Checking if it exists in "Notes" or "TelegramBot/Notes" should return True
+    assert await test_db.note_exists("SpecificNote.md", "Notes") is True
+    assert await test_db.note_exists("SpecificNote.md", "TelegramBot/Notes") is True
+
+    # Now add a note truly in root ("")
+    await test_db.add_note_log(
+        filename="TrulyRoot.md",
+        category="",
+        tags="",
+        content="Root content"
+    )
+    assert await test_db.note_exists("TrulyRoot.md", "") is True
+    assert await test_db.note_exists("TrulyRoot.md", "Root") is True
+    assert await test_db.note_exists("TrulyRoot.md", "Notes") is False
+
+@pytest.mark.asyncio
+async def test_database_auto_creates_parent_directory(tmp_path):
+    nested_db_file = tmp_path / "deep" / "nested" / "dir" / "test.db"
+    assert not nested_db_file.parent.exists()
+    db = DatabaseManager(db_path=str(nested_db_file))
+    await db.init_db()
+    assert nested_db_file.parent.exists()
+    assert nested_db_file.exists()
+    await db.close()
+
+@pytest.mark.asyncio
+async def test_note_by_id_and_file_cat(test_db: DatabaseManager):
+    note_id = await test_db.add_note_log(
+        filename="TestNote.md",
+        category="TelegramBot/Notes",
+        tags="test, unit",
+        content="Hello world content"
+    )
+    assert isinstance(note_id, int)
+    assert note_id > 0
+
+    # Retrieve by ID
+    note = await test_db.get_note_by_id(note_id)
+    assert note is not None
+    assert note["id"] == note_id
+    assert note["filename"] == "TestNote.md"
+    assert note["category"] == "TelegramBot/Notes"
+    assert note["tags"] == "test, unit"
+    assert note["content"] == "Hello world content"
+
+    # Non-existent ID
+    assert await test_db.get_note_by_id(999999) is None
+
+    # Retrieve by file and category
+    note_by_cat = await test_db.get_note_by_file_and_cat("TestNote.md", "TelegramBot/Notes")
+    assert note_by_cat is not None
+    assert note_by_cat["id"] == note_id
+
+    # Non-existent file/category
+    assert await test_db.get_note_by_file_and_cat("NoSuchNote.md", "TelegramBot/Notes") is None
+
+@pytest.mark.asyncio
+async def test_expenses_summary(test_db: DatabaseManager):
+    user_id = 999
+    # Add expenses
+    await test_db.add_expense(user_id, 250.0, "Кофе")
+    await test_db.add_expense(user_id, 1500.5, "Продукты")
+
+    summary = await test_db.get_expenses_summary(user_id)
+    assert summary["today_sum"] == 1750.5
+    assert summary["today_count"] == 2
+    assert summary["month_sum"] == 1750.5
+    assert summary["month_count"] == 2
+    assert len(summary["today_records"]) == 2
+
+    # Different user has 0
+    other_summary = await test_db.get_expenses_summary(888)
+    assert other_summary["today_sum"] == 0.0
+    assert other_summary["today_count"] == 0
+
+@pytest.mark.asyncio
+async def test_tags_with_counts_and_get_notes_by_tag(test_db: DatabaseManager):
+    await test_db.add_note_log(
+        filename="NoteA.md",
+        category="TelegramBot/Notes",
+        tags="python, backend, ai",
+        content="Coding in python"
+    )
+    await test_db.add_note_log(
+        filename="NoteB.md",
+        category="TelegramBot/Notes",
+        tags="python, data",
+        content="Data science and python"
+    )
+    await test_db.add_note_log(
+        filename="NoteC.md",
+        category="TelegramBot/Notes",
+        tags="design",
+        content="UI and design #figma"
+    )
+
+    tags = await test_db.get_all_tags_with_counts()
+    tag_dict = dict(tags)
+    assert tag_dict["python"] == 2
+    assert tag_dict["backend"] == 1
+    assert tag_dict["ai"] == 1
+    assert tag_dict["data"] == 1
+    assert tag_dict["design"] == 1
+
+    # Python is the most frequent
+    assert tags[0][0] == "python"
+    assert tags[0][1] == 2
+
+    # Get notes by tag
+    notes_python = await test_db.get_notes_by_tag("python")
+    assert len(notes_python) == 2
+    fnames = [n[0] for n in notes_python]
+    assert "NoteA.md" in fnames
+    assert "NoteB.md" in fnames
+
+    # Get notes by tag in content (#figma)
+    notes_figma = await test_db.get_notes_by_tag("figma")
+    assert len(notes_figma) == 1
+    assert notes_figma[0][0] == "NoteC.md"
+
+
+

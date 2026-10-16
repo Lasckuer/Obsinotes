@@ -11,6 +11,30 @@ def test_extract_urls():
 
     assert extract_urls("Просто текст без ссылок") == []
 
+def test_extract_urls_sanitization():
+    # Punctuation at the end of URLs
+    text = "Ссылки: (https://example.com/one), [https://example.com/two], {https://example.com/three}."
+    urls = extract_urls(text)
+    assert "https://example.com/one" in urls
+    assert "https://example.com/two" in urls
+    assert "https://example.com/three" in urls
+
+    # Sentence ending punctuation
+    text2 = "Проверь https://example.com/article. И еще: https://example.com/guide! А также https://example.com/faq?"
+    urls2 = extract_urls(text2)
+    assert urls2 == [
+        "https://example.com/article",
+        "https://example.com/guide",
+        "https://example.com/faq"
+    ]
+
+    # Balanced parentheses in Wikipedia URLs should NOT have closing parenthesis stripped
+    text3 = "Статья: https://ru.wikipedia.org/wiki/C_(programming_language) и в скобках (https://en.wikipedia.org/wiki/Function_(mathematics))."
+    urls3 = extract_urls(text3)
+    assert "https://ru.wikipedia.org/wiki/C_(programming_language)" in urls3
+    assert "https://en.wikipedia.org/wiki/Function_(mathematics)" in urls3
+
+
 @pytest.mark.asyncio
 async def test_fetch_url_content():
     fake_html = """

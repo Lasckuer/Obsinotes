@@ -1,16 +1,19 @@
 import asyncio
 import os
+from typing import Optional
 from pytz import timezone
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import get_settings
+from app.middlewares.auth import AuthMiddleware
 from app.database.db import init_db, close_db
 from app.services.s3_storage import S3StorageService
 from app.services.llm import close_llm_clients
@@ -44,17 +47,33 @@ else:
 
 dp = Dispatcher(storage=storage)
 
-dp.include_router(search.router)
-dp.include_router(messages.router)
+# Register security & access control middleware
+dp.message.middleware(AuthMiddleware())
+dp.callback_query.middleware(AuthMiddleware())
 
-@dp.message(CommandStart())
-async def start(message: Message):
+start_router = Router()
+
+@start_router.message(CommandStart())
+async def start(message: Message, state: Optional[FSMContext] = None):
+    if state is not None:
+        await state.clear()
     await message.answer(
-        "👋 Бот для Obsidian запущен.\nВыберите действие на клавиатуре ниже:",
+        "👋 Бот для Obsidian запущен.\n"
+        "Отправьте текст, фото, документ (.pdf, .docx, .txt, .md) или аудиосообщение.\n\n"
+        "Быстрые команды:\n"
+        "• /daily — ежедневник (задачи и мысли на день)\n"
+        "• /expenses — сводка расходов за день и месяц\n"
+        "• /tags — каталог заметок по тегам\n"
+        "• /sync — синхронизация с S3\n"
+        "• /help — подробная справка",
         reply_markup=get_main_keyboard()
     )
     if message.from_user:
         log_user_start(message.from_user.id)
+
+dp.include_router(start_router)
+dp.include_router(search.router)
+dp.include_router(messages.router)
 
 async def main():
     log_db_init()
@@ -63,6 +82,21 @@ async def main():
     log_s3_init()
     storage_service = S3StorageService()
     await storage_service.init_folders()
+
+    # Register bot commands menu in Telegram
+    try:
+        from aiogram.types import BotCommand
+        bot_commands = [
+            BotCommand(command="daily", description="Добавить запись в ежедневник"),
+            BotCommand(command="expenses", description="Сводка расходов за день и месяц"),
+            BotCommand(command="tags", description="Обзор заметок по тегам"),
+            BotCommand(command="sync", description="Синхронизация с S3"),
+            BotCommand(command="cancel", description="Отмена действия"),
+            BotCommand(command="help", description="Справка по командам"),
+        ]
+        await bot.set_my_commands(bot_commands)
+    except Exception as e:
+        logger.warning(f"Не удалось установить меню команд: {e}")
 
     log_scheduler_start()
     tz = timezone(settings.TIMEZONE)

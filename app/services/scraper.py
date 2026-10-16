@@ -15,10 +15,27 @@ def extract_urls(text: str) -> List[str]:
     matches = URL_PATTERN.findall(text)
     urls = []
     for u in matches:
+        while u:
+            last = u[-1]
+            if last in ".,;:!?":
+                u = u[:-1]
+            elif last == ')' and u.count(')') > u.count('('):
+                u = u[:-1]
+            elif last == ']' and u.count(']') > u.count('['):
+                u = u[:-1]
+            elif last == '}' and u.count('}') > u.count('{'):
+                u = u[:-1]
+            elif last == '>' and u.count('>') > u.count('<'):
+                u = u[:-1]
+            else:
+                break
+        if not u:
+            continue
         if not u.startswith("http://") and not u.startswith("https://"):
             u = f"https://{u}"
         urls.append(u)
     return urls
+
 
 async def fetch_url_content(url: str, max_chars: int = 4000) -> str:
     """

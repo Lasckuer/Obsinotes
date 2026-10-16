@@ -56,6 +56,39 @@ async def test_download_file(s3_service):
         assert content == b"# My Note"
 
 @pytest.mark.asyncio
+async def test_download_file_root(s3_service):
+    mock_body = AsyncMock()
+    mock_body.read = AsyncMock(return_value=b"# Root Note")
+    mock_client = AsyncMock()
+    mock_client.get_object = AsyncMock(return_value={"Body": mock_body})
+
+    with patch.object(s3_service, "get_client") as mock_get_client:
+        mock_get_client.return_value.__aenter__.return_value = mock_client
+        # Downloading with empty folder ""
+        content1 = await s3_service.download_file("", "root.md")
+        assert content1 == b"# Root Note"
+        mock_client.get_object.assert_called_with(Bucket="test-bucket", Key="root.md")
+
+        # Downloading with "Root" folder
+        content2 = await s3_service.download_file("Root", "root.md")
+        assert content2 == b"# Root Note"
+        mock_client.get_object.assert_called_with(Bucket="test-bucket", Key="root.md")
+
+@pytest.mark.asyncio
+async def test_download_file_legacy_fallback(s3_service):
+    async def fake_download_by_key(key):
+        if key == "Notes/legacy.md":
+            return b"" # not found directly in Notes
+        elif key == "TelegramBot/Notes/legacy.md":
+            return b"# Legacy Content"
+        return b""
+
+    with patch.object(s3_service, "download_file_by_key", side_effect=fake_download_by_key):
+        content = await s3_service.download_file("Notes", "legacy.md")
+        assert content == b"# Legacy Content"
+
+
+@pytest.mark.asyncio
 async def test_batch_download(s3_service):
     async def fake_download(key):
         return f"content of {key}".encode("utf-8")
@@ -67,3 +100,18 @@ async def test_batch_download(s3_service):
         assert res["Notes/1.md"] == b"content of Notes/1.md"
         assert res["Notes/2.md"] == b"content of Notes/2.md"
         assert res["Notes/3.md"] == b"content of Notes/3.md"
+
+@pytest.mark.asyncio
+async def test_delete_file(s3_service):
+    mock_client = AsyncMock()
+    mock_client.delete_object = AsyncMock(return_value={})
+
+    with patch.object(s3_service, "get_client") as mock_get_client:
+        mock_get_client.return_value.__aenter__.return_value = mock_client
+        res = await s3_service.delete_file("Notes", "test.md")
+        assert res is True
+        mock_client.delete_object.assert_called_once_with(
+            Bucket="test-bucket",
+            Key="Notes/test.md"
+        )
+

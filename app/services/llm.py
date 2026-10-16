@@ -4,6 +4,7 @@ import os
 import re
 import datetime
 import asyncio
+import mimetypes
 from typing import Optional, Dict, Any, AsyncGenerator
 
 import httpx
@@ -122,28 +123,24 @@ Existing recent notes in user's Obsidian:
 {recent_notes}
 
 RULES FOR JSON FIELDS:
-1. "thought_process": You MUST use this field to think step-by-step BEFORE filling other fields.
-   - Step 1: Determine the intent. Is it an explicit request for an alarm, an expense, a creative thought, or just a plan/information?
-   - Step 2: Compare the input's core topic with the EXACT names in "Existing recent notes". Is there a direct logical connection or continuation?
-2. "category": Pick EXACTLY ONE based on Step 1:
+1. "category": Pick EXACTLY ONE:
    - "Reminders": ONLY IF the user explicitly asks for an alert (e.g., "напомни", "каждый час") OR specifies a strict future time for a task.
    - "Finance": ONLY IF money, purchases with prices, or budgets are mentioned.
    - "Ideas": ONLY IF it's an abstract brainstorming concept or a distant dream.
    - "Notes": DEFAULT category for everything else (everyday plans like "Надо купить билеты", facts, information, events).
-3. "tags": Array of strings related to the topic (NO #).
-4. "filename": Short, descriptive, STRICTLY IN RUSSIAN. Capitalize the first letter and use SPACES instead of underscores. DO NOT use "_".
-5. "corrected_text": 
+2. "tags": Array of strings related to the topic (NO #).
+3. "filename": Short, descriptive, STRICTLY IN RUSSIAN. Capitalize the first letter and use SPACES instead of underscores. DO NOT use "_".
+4. "corrected_text": 
    - IF "category" is "Reminders": Rewrite as a DIRECT INSTRUCTION for the core action ONLY ("Тебе нужно..."). REMOVE all time markers and meta-requests like "напомни мне", "каждый час", "в 15:00". Example: "напомни каждый час разминать спину" -> "Тебе нужно размять спину!".
    - IF "category" is "Notes", "Ideas", or "Finance": KEEP the original meaning and style. Do not make it a command. Just fix typos and format beautifully in Markdown.
-   - SEMANTIC LINKING: IF Step 2 found a strong, obvious logical connection (e.g., cause/effect, same project) to an EXISTING note, you MUST append this to the very end of the text: \n\n**Связанные заметки:** [[Exact_Name_From_List]]
+   - SEMANTIC LINKING: IF you find a strong, obvious logical connection (e.g., cause/effect, same project) to an EXISTING note from the list, append this to the very end of the text: \n\n**Связанные заметки:** [[Exact_Name_From_List]]
    - IF NO CONNECTION IS FOUND, do NOT add the "Связанные заметки" line at all.
-6. "remind_time": "YYYY-MM-DD HH:MM" if a specific time is requested, else empty string "".
-7. "recur_minutes": 60 if "every hour", 1440 if "every day", else 0.
-8. "expense_amount": Number if finance, else 0.
+5. "remind_time": "YYYY-MM-DD HH:MM" if a specific time is requested, else empty string "".
+6. "recur_minutes": 60 if "every hour", 1440 if "every day", else 0.
+7. "expense_amount": Number if finance, else 0.
 
 CRITICAL EXAMPLE OF CORRECT OUTPUT:
 {{
-  "thought_process": "Step 1: Input says 'Надо купить билеты в Турцию'. No explicit 'remind me' or time, so it's a general plan -> category 'Notes'. Step 2: Checking recent notes. I see 'Путешествие в Турцию'. There is a direct logical connection (buying tickets for the planned trip). I will link them.",
   "category": "Notes",
   "tags": ["путешествия", "покупки"],
   "corrected_text": "Надо купить билеты в Турцию.\\n\\n**Связанные заметки:** [[Путешествие в Турцию]]",
@@ -171,7 +168,7 @@ CRITICAL EXAMPLE OF CORRECT OUTPUT:
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=450
+            max_tokens=2048
         )
         content = response.choices[0].message.content or ""
         return parse_json_safely(content)
@@ -193,7 +190,30 @@ async def transcribe_audio(filepath: str) -> str:
         with open(filepath, "rb") as f:
             file_bytes = f.read()
 
-        file_tuple = (os.path.basename(filepath), file_bytes, "audio/ogg")
+        ext = os.path.splitext(filepath)[1].lower()
+        upload_name = os.path.basename(filepath)
+        if not ext:
+            ext = ".ogg"
+            upload_name = f"{upload_name}.ogg"
+
+        mime_types = {
+            ".mp3": "audio/mpeg",
+            ".m4a": "audio/mp4",
+            ".wav": "audio/wav",
+            ".ogg": "audio/ogg",
+            ".oga": "audio/ogg",
+            ".opus": "audio/ogg",
+            ".flac": "audio/flac",
+            ".webm": "audio/webm",
+            ".aac": "audio/aac",
+            ".mp4": "audio/mp4",
+            ".mpeg": "audio/mpeg",
+            ".mpga": "audio/mpeg",
+        }
+        content_type = mime_types.get(ext) or mimetypes.guess_type(filepath)[0] or "audio/ogg"
+        if ext == ".oga":
+            upload_name = os.path.splitext(upload_name)[0] + ".ogg"
+        file_tuple = (upload_name, file_bytes, content_type)
         response = await audio_client.audio.transcriptions.create(
             model=settings.GROQ_MODEL,
             file=file_tuple
@@ -285,6 +305,8 @@ User Question:
     async for chunk in _stream_generation(prompt, 0.1, 1000, fallback):
         yield chunk
 
+ask_about_notes = stream_answer_question
+
 async def stream_process_examiner_text(text: str, recent_notes: str = "") -> AsyncGenerator[str, None]:
     prompt = f"""You are an expert data structurer for Obsidian. Transform the raw text into a clean, readable Markdown note.
 
@@ -328,7 +350,7 @@ Existing recent notes:
 {recent_notes}
 
 Document Text:
-{text[:3500]}"""
+{text[:25000]}"""
 
     fallback = f"### Оригинальный текст документа (ошибка генерации):\n\n{text}"
     async for chunk in _stream_generation(prompt, 0.2, 1200, fallback):

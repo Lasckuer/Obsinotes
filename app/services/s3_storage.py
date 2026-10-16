@@ -118,6 +118,42 @@ class S3StorageService:
             log_s3_error(f"Get all files error: {e}")
         return files
 
+    async def list_files_with_metadata(self, folder: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Lists all non-directory objects with metadata (key, etag, last_modified, size).
+        If folder is specified, filters by prefix.
+        """
+        if not self.is_configured():
+            return []
+        prefix = f"{folder.strip('/')}/" if folder else ""
+        files: List[Dict[str, Any]] = []
+        try:
+            async with self.get_client() as s3:
+                paginator = s3.get_paginator('list_objects_v2')
+                paginate_kwargs: Dict[str, Any] = {"Bucket": self.bucket_name}
+                if prefix:
+                    paginate_kwargs["Prefix"] = prefix
+                async for result in paginator.paginate(**paginate_kwargs):
+                    for item in result.get('Contents', []):
+                        key = item['Key']
+                        if not key.endswith('/'):
+                            raw_etag = item.get('ETag', '')
+                            etag = raw_etag.strip('"') if isinstance(raw_etag, str) else str(raw_etag)
+                            lm = item.get('LastModified')
+                            lm_str = lm.isoformat() if hasattr(lm, 'isoformat') else (str(lm) if lm else "")
+                            size = item.get('Size', 0)
+                            files.append({
+                                'key': key,
+                                'etag': etag,
+                                'last_modified': lm_str,
+                                'size': size
+                            })
+        except Exception as e:
+            log_s3_error(f"List files with metadata error: {e}")
+        return files
+
+    list_files = list_files_with_metadata
+
     async def download_file_by_key(self, key: str) -> bytes:
         """Downloads and returns raw bytes of an object by its exact key."""
         if not self.is_configured():
@@ -132,8 +168,14 @@ class S3StorageService:
 
     async def download_file(self, folder: str, filename: str) -> bytes:
         """Downloads file at folder/filename."""
-        key = f"{folder.strip('/')}/{filename}" if folder else filename
-        return await self.download_file_by_key(key)
+        if not folder or folder == "Root":
+            key = filename
+        else:
+            key = f"{folder.strip('/')}/{filename}"
+        data = await self.download_file_by_key(key)
+        if not data and not key.startswith("TelegramBot/"):
+            data = await self.download_file_by_key(f"TelegramBot/{key}")
+        return data
 
     async def batch_download(self, keys: List[str], max_concurrency: int = 5) -> Dict[str, bytes]:
         """
@@ -155,3 +197,26 @@ class S3StorageService:
         tasks = [_download_one(k) for k in keys]
         await asyncio.gather(*tasks, return_exceptions=True)
         return results
+
+    async def delete_file_by_key(self, key: str) -> bool:
+        """Deletes an object by its exact key."""
+        if not self.is_configured():
+            return False
+        try:
+            async with self.get_client() as s3:
+                await s3.delete_object(Bucket=self.bucket_name, Key=key)
+            return True
+        except Exception as e:
+            log_s3_error(f"Delete by key error '{key}': {e}")
+            return False
+
+    async def delete_file(self, folder: str, filename: str) -> bool:
+        """Deletes file at folder/filename."""
+        if not folder or folder == "Root":
+            key = filename
+        else:
+            key = f"{folder.strip('/')}/{filename}"
+        res = await self.delete_file_by_key(key)
+        if not res and not key.startswith("TelegramBot/"):
+            res = await self.delete_file_by_key(f"TelegramBot/{key}")
+        return res

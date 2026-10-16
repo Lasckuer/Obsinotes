@@ -6,6 +6,7 @@ from app.services.llm import (
     get_rephrased_filename,
     generate_semantic_filename,
     stream_answer_question,
+    transcribe_audio,
     close_llm_clients
 )
 
@@ -43,6 +44,50 @@ async def test_process_text():
         data = await process_text("Купить билеты")
         assert data.get("category") == "Notes"
         assert data.get("filename") == "Покупка.md"
+
+        # Verify max_tokens is 2048
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs.get("max_tokens") == 2048
+
+        # Verify heavy thought_process requirement is removed from prompt
+        prompt_content = call_kwargs["messages"][0]["content"]
+        assert "thought_process" not in prompt_content
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_mime_detection(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "fake_groq_key")
+    from app.config import reload_settings
+    reload_settings()
+
+    mock_resp = MagicMock()
+    mock_resp.text = "Распознанный голос"
+
+    mock_audio_client = AsyncMock()
+    mock_audio_client.audio.transcriptions.create = AsyncMock(return_value=mock_resp)
+
+    test_cases = [
+        ("voice.ogg", "audio/ogg", "voice.ogg"),
+        ("music.mp3", "audio/mpeg", "music.mp3"),
+        ("speech.m4a", "audio/mp4", "speech.m4a"),
+        ("sound.wav", "audio/wav", "sound.wav"),
+        ("podcast.opus", "audio/ogg", "podcast.opus"),
+        ("track.aac", "audio/aac", "track.aac"),
+        ("raw_audio", "audio/ogg", "raw_audio.ogg"),
+    ]
+
+    with patch("app.services.llm.get_audio_client", return_value=mock_audio_client):
+        for fname, expected_mime, expected_upload_name in test_cases:
+            file_path = tmp_path / fname
+            file_path.write_bytes(b"dummy audio data")
+
+            res = await transcribe_audio(str(file_path))
+            assert res == "Распознанный голос"
+
+            call_kwargs = mock_audio_client.audio.transcriptions.create.call_args[1]
+            file_tuple = call_kwargs["file"]
+            assert file_tuple[0] == expected_upload_name
+            assert file_tuple[2] == expected_mime
+
 
 @pytest.mark.asyncio
 async def test_get_rephrased_filename_unique():

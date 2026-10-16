@@ -5,7 +5,11 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Returns the main persistent keyboard menu."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📝 Отправить заметку"), KeyboardButton(text="🔍 Поиск / 🤖 ИИ")],
+            [
+                KeyboardButton(text="📝 Отправить заметку"),
+                KeyboardButton(text="🔍 Поиск / 🤖 ИИ"),
+                KeyboardButton(text="🔄 Полная синхронизация S3")
+            ],
         ],
         resize_keyboard=True
     )
