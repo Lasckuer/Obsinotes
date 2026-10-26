@@ -111,8 +111,44 @@ async def test_search_notes(test_db: DatabaseManager):
     assert len(results) == 1
     assert results[0][0] == "Кулинарный рецепт.md"
 
+    # Conversational query with stop words
+    results_conv = await test_db.search_notes("Найди заметки про docker")
+    assert len(results_conv) == 1
+    assert results_conv[0][0] == "Установка Docker.md"
+    assert results_conv[0].snippet != ""
+
+    results_conv2 = await test_db.search_notes("Поищи о пицце")
+    assert len(results_conv2) == 1
+    assert results_conv2[0][0] == "Кулинарный рецепт.md"
+
+    # Search with snippets method
+    snip_results = await test_db.search_notes_with_snippets("docker")
+    assert len(snip_results) == 1
+    assert snip_results[0][0] == "Установка Docker.md"
+    assert "Linux" in snip_results[0][2]
+
+    # Search for C++ note
+    await test_db.add_note_log(
+        filename="Основы C++.md",
+        category="TelegramBot/Coding",
+        tags="cpp, programming",
+        content="Руководство по языку C++ для начинающих разработчиков."
+    )
+    cpp_results = await test_db.search_notes("C++")
+    assert len(cpp_results) == 1
+    assert cpp_results[0][0] == "Основы C++.md"
+
+    # Total notes count
+    assert await test_db.get_total_notes_count() == 3
+
     # Empty query returns empty list
     assert await test_db.search_notes("   ") == []
+
+    # Punctuation/symbol query in RAG does not crash with UnboundLocalError
+    rag_punct = await test_db.search_rag_context("???")
+    assert isinstance(rag_punct, list)
+
+
 
 @pytest.mark.asyncio
 async def test_recent_context_and_linking(test_db: DatabaseManager):

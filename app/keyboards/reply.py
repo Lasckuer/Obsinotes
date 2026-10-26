@@ -1,15 +1,45 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 
+MAIN_MENU_BUTTONS = {
+    # New 2-column buttons
+    "📝 Новая заметка",
+    "🔍 Поиск заметок",
+    "🤖 Спросить ИИ",
+    "🏷️ Каталог тегов",
+    "📅 Ежедневник",
+    "💰 Расходы",
+    "🔄 Синхронизация S3",
+    "⚙️ Статус и справка",
+    # Legacy buttons for backwards compatibility
+    "📝 Отправить заметку",
+    "🔍 Поиск / 🤖 ИИ",
+    "🔄 Полная синхронизация S3",
+}
+
+CANCEL_BUTTONS = {
+    "🔙 В главное меню",
+    "В главное меню",
+    "в главное меню",
+    "❌ Отмена",
+    "❌ отмена",
+    "отмена",
+    "Отмена",
+    "ОТМЕНА",
+    "отменить",
+    "Отменить",
+}
+
+ALL_NAVIGATION_BUTTONS = MAIN_MENU_BUTTONS | CANCEL_BUTTONS
+
 def get_main_keyboard() -> ReplyKeyboardMarkup:
-    """Returns the main persistent keyboard menu."""
+    """Returns the main persistent 2-column keyboard menu."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [
-                KeyboardButton(text="📝 Отправить заметку"),
-                KeyboardButton(text="🔍 Поиск / 🤖 ИИ"),
-                KeyboardButton(text="🔄 Полная синхронизация S3")
-            ],
+            [KeyboardButton(text="📝 Новая заметка"), KeyboardButton(text="🔍 Поиск заметок")],
+            [KeyboardButton(text="🤖 Спросить ИИ"), KeyboardButton(text="🏷️ Каталог тегов")],
+            [KeyboardButton(text="📅 Ежедневник"), KeyboardButton(text="💰 Расходы")],
+            [KeyboardButton(text="🔄 Синхронизация S3"), KeyboardButton(text="⚙️ Статус и справка")],
         ],
         resize_keyboard=True
     )

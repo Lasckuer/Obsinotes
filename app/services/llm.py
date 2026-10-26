@@ -5,7 +5,7 @@ import re
 import datetime
 import asyncio
 import mimetypes
-from typing import Optional, Dict, Any, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator, Tuple
 
 import httpx
 from openai import AsyncOpenAI
@@ -21,15 +21,72 @@ _audio_client: Optional[AsyncOpenAI] = None
 
 def get_llm_client() -> AsyncOpenAI:
     global _client, _internal_http_client
+    settings = get_settings()
+    proxy = settings.PROXY_URL if settings.PROXY_URL else None
+
+    # Invalidate cached client if settings (e.g. provider URL, key) changed
+    if _client is not None:
+        base_match = str(_client.base_url).rstrip('/') == str(settings.AI_BASE_URL).rstrip('/')
+        key_match = _client.api_key == settings.AI_API_KEY
+        if not (base_match and key_match):
+            _client = None
+            _internal_http_client = None
+
     if _client is None:
-        settings = get_settings()
-        _internal_http_client = httpx.AsyncClient(timeout=60.0)
+        _internal_http_client = httpx.AsyncClient(proxy=proxy, timeout=60.0)
         _client = AsyncOpenAI(
             api_key=settings.AI_API_KEY,
             base_url=settings.AI_BASE_URL,
             http_client=_internal_http_client
         )
     return _client
+
+async def test_ai_connection() -> Tuple[bool, str, float]:
+    """
+    Tests connection to the configured AI provider.
+    Returns (success: bool, status_message: str, latency_seconds: float).
+    """
+    settings = get_settings()
+    client = get_llm_client()
+    start_time = asyncio.get_event_loop().time()
+    try:
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=settings.AI_MODEL,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=5,
+                temperature=0.0
+            ),
+            timeout=15.0
+        )
+        latency = asyncio.get_event_loop().time() - start_time
+        return True, "Связь с моделью успешно установлена!", round(latency, 2)
+    except asyncio.TimeoutError:
+        latency = asyncio.get_event_loop().time() - start_time
+        return False, "Таймаут подключения (сервер не ответил за 15 секунд). Проверьте PROXY_URL или интернет.", round(latency, 2)
+    except Exception as e:
+        latency = asyncio.get_event_loop().time() - start_time
+        err_str = str(e)
+        err_lower = err_str.lower()
+        if (
+            "401" in err_str
+            or "unauthorized" in err_lower
+            or "invalid api key" in err_lower
+            or "api key not valid" in err_lower
+            or "api_key_invalid" in err_lower
+            or "invalid_api_key" in err_lower
+            or "permission_denied" in err_lower
+        ):
+            msg = f"Ошибка авторизации: неверный API-ключ ({settings.active_ai_provider_display})."
+        elif "404" in err_str or "not found" in err_lower or "model_not_found" in err_lower:
+            msg = f"Модель '{settings.AI_MODEL}' не найдена у провайдера {settings.active_ai_provider_display}."
+        elif "429" in err_str or "quota" in err_lower or "rate limit" in err_lower:
+            msg = "Превышен лимит запросов (Rate Limit / Quota Exceeded)."
+        elif "proxy" in err_lower:
+            msg = f"Ошибка прокси-сервера ({settings.PROXY_URL}). Проверьте настройки PROXY_URL."
+        else:
+            msg = f"Ошибка подключения к {settings.active_ai_provider_display}: {err_str[:150]}"
+        return False, msg, round(latency, 2)
 
 def get_audio_client() -> Optional[AsyncOpenAI]:
     global _audio_client, _external_http_client
@@ -64,22 +121,25 @@ def parse_json_safely(raw_text: str) -> Dict[str, Any]:
     the outermost JSON object if present.
     """
     cleaned = raw_text.strip()
-    # Strip markdown fences if present
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-        cleaned = cleaned.strip()
-
+    # 1. Try direct parse
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
 
-    # Attempt to extract first JSON object {...}
-    match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+    # 2. Extract code fence content if present anywhere
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned)
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+
+    # 3. Attempt to extract outermost JSON object {...}
+    match = re.search(r"(\{[\s\S]*\})", cleaned)
     if match:
         try:
-            return json.loads(match.group(1))
+            return json.loads(match.group(1).strip())
         except json.JSONDecodeError:
             pass
 

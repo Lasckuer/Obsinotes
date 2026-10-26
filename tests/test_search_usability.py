@@ -236,3 +236,170 @@ async def test_search_mode_allows_switching_to_other_menu_actions(monkeypatch):
 
     # State is cleared cleanly
     assert await fsm.get_state() is None
+
+def test_search_query_cleaning():
+    from app.database.db import clean_search_query, sanitize_fts_token, extract_snippet
+
+    # Conversational query
+    res = clean_search_query("Найди заметки про кленбутерол")
+    assert res == ["кленбутерол"]
+
+    # Complex multi-keyword query
+    res2 = clean_search_query("Поищи о сервере linux и nginx")
+    assert "сервере" in res2
+    assert "linux" in res2
+    assert "nginx" in res2
+    assert "поищи" not in res2
+
+    # Query consisting only of stop words should fall back to non-empty tokens
+    res3 = clean_search_query("заметки")
+    assert res3 == ["заметки"]
+
+    # FTS token sanitization
+    assert sanitize_fts_token('hello"world*:') == 'helloworld'
+    assert sanitize_fts_token("тест^123") == "тест123"
+
+    # Snippet extraction
+    content = "---\ntags: [med]\n---\n\nПрепарат кленбутерол применяется в спортивной медицине для ускорения метаболизма."
+    snippet = extract_snippet(content, ["кленбутерол"], max_chars=50)
+    assert "кленбутерол" in snippet.lower()
+    assert "---" not in snippet
+
+@pytest.mark.asyncio
+async def test_search_empty_db_prompts_s3_sync(mock_user, mock_chat, fsm_context):
+    from app.handlers.search import handle_search_or_ai, SearchAIState
+
+    await fsm_context.set_state(SearchAIState.waiting_for_input)
+    await fsm_context.update_data(search_mode="search")
+
+    msg = create_mock_message("любой запрос", mock_user, mock_chat)
+    status_msg = AsyncMock(spec=Message)
+    status_msg.delete = AsyncMock()
+    msg.answer.return_value = status_msg
+
+    with patch("app.handlers.search.search_notes", AsyncMock(return_value=[])), \
+         patch("app.handlers.search.get_total_notes_count", AsyncMock(return_value=0)):
+        await handle_search_or_ai(msg, fsm_context)
+        # Verify user was prompted about empty DB and S3 sync
+        last_answer = msg.answer.call_args[0][0]
+        assert "базе данных пока нет заметок" in last_answer
+        assert "Синхронизация S3" in last_answer
+
+@pytest.mark.asyncio
+async def test_status_command_and_ping_callback(mock_user, mock_chat):
+    from app.handlers.messages import cmd_status_and_help, handle_test_ai_callback
+
+    msg = create_mock_message("/status", mock_user, mock_chat)
+    with patch("app.handlers.messages.get_total_notes_count", AsyncMock(return_value=42)), \
+         patch("app.handlers.messages.get_today_notes", AsyncMock(return_value=[("T.md", "Notes")])):
+        await cmd_status_and_help(msg)
+        ans = msg.answer.call_args[0][0]
+        assert "Статус системы и справка" in ans
+        assert "42" in ans
+        assert "reply_markup" in msg.answer.call_args[1]
+
+    # Test callback test_ai
+    cb = AsyncMock(spec=CallbackQuery)
+    cb.data = "test_ai"
+    cb.from_user = mock_user
+    cb.answer = AsyncMock()
+    cb_msg = create_mock_message("", mock_user, mock_chat)
+    cb_msg.edit_text = AsyncMock()
+    cb.message = cb_msg
+
+    with patch("app.handlers.messages.test_ai_connection", AsyncMock(return_value=(True, "OK", 0.15))):
+        await handle_test_ai_callback(cb)
+        cb.answer.assert_called_once()
+        assert cb_msg.edit_text.call_count >= 1
+        last_edit = cb_msg.edit_text.call_args[0][0]
+        assert "Результат проверки связи с ИИ" in last_edit
+        assert "0.15 сек" in last_edit
+
+@pytest.mark.asyncio
+async def test_daily_format_callback(mock_user, mock_chat, fsm_context):
+    from app.handlers.messages import handle_daily_format_callback, handle_daily_input, DailyState
+
+    await fsm_context.set_state(DailyState.waiting_for_text)
+
+    cb = AsyncMock(spec=CallbackQuery)
+    cb.data = "daily_fmt:todo"
+    cb.from_user = mock_user
+    cb.answer = AsyncMock()
+    cb_msg = create_mock_message("", mock_user, mock_chat)
+    cb_msg.edit_text = AsyncMock()
+    cb.message = cb_msg
+
+    await handle_daily_format_callback(cb, fsm_context)
+    data = await fsm_context.get_data()
+    assert data.get("daily_prefix") == "- [ ] "
+
+    # Now user sends todo text
+    input_msg = create_mock_message("Купить молоко", mock_user, mock_chat)
+    with patch("app.handlers.messages.append_daily_note", AsyncMock(return_value=("2026-10-26.md", "TelegramBot/Daily", 101))) as mock_append:
+        await handle_daily_input(input_msg, fsm_context)
+        mock_append.assert_called_once_with("- [ ] Купить молоко")
+
+def test_search_query_cleaning_special_terms():
+    from app.database.db import clean_search_query
+
+    # Terms with programming symbols
+    res_cpp = clean_search_query("C++")
+    assert "C" in res_cpp or "C++" in res_cpp
+
+    # Single character queries
+    res_c = clean_search_query("C")
+    assert "C" in res_c
+
+    # Pure symbols
+    res_sym = clean_search_query("---")
+    assert res_sym == ["---"]
+
+@pytest.mark.asyncio
+async def test_handle_sync_now_callback(mock_user, mock_chat):
+    from app.handlers.messages import handle_sync_now_callback
+
+    cb = AsyncMock(spec=CallbackQuery)
+    cb.data = "sync_now"
+    cb.from_user = mock_user
+    cb.answer = AsyncMock()
+    cb_msg = create_mock_message("", mock_user, mock_chat)
+    cb_msg.edit_text = AsyncMock()
+    cb.message = cb_msg
+
+    with patch("app.handlers.messages.run_s3_sync", AsyncMock(return_value=(5, 2, 1))):
+        await handle_sync_now_callback(cb)
+        cb.answer.assert_called_once()
+        assert cb_msg.edit_text.call_count >= 1
+        last_edit = cb_msg.edit_text.call_args[0][0]
+        assert "Синхронизация S3 завершена" in last_edit
+        assert "Добавлено заметок: **5**" in last_edit
+        assert "Удалено устаревших: **1**" in last_edit
+
+@pytest.mark.asyncio
+async def test_search_ai_suppresses_sources_when_no_info(mock_user, mock_chat, fsm_context):
+    from app.handlers.search import handle_search_or_ai, SearchAIState
+
+    await fsm_context.set_state(SearchAIState.waiting_for_input)
+    await fsm_context.update_data(search_mode="ai")
+
+    msg = create_mock_message("Как настроить kubernetes?", mock_user, mock_chat)
+    status_msg = create_mock_message("", mock_user, mock_chat)
+    status_msg.edit_text = AsyncMock()
+    msg.answer = AsyncMock(return_value=status_msg)
+
+    fake_rag = [
+        {"filename": "Рецепт.md", "category": "Recipes", "content": "Рецепт борща", "date": "2026-10-26"}
+    ]
+
+    with patch("app.handlers.search.search_rag_context", AsyncMock(return_value=fake_rag)), \
+         patch("app.handlers.search.stream_to_message", AsyncMock(return_value="К сожалению, в ваших заметках нет информации об этом.")):
+        await handle_search_or_ai(msg, fsm_context)
+        edit_args = status_msg.edit_text.call_args
+        assert edit_args is not None
+        displayed_text = edit_args[0][0]
+        assert "нет информации" in displayed_text
+        assert "Использованные заметки" not in displayed_text
+        # No inline download keyboard when no info found
+        assert edit_args[1].get("reply_markup") is None
+
+

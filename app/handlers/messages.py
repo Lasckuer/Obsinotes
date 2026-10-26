@@ -23,7 +23,8 @@ from app.services.llm import (
     stream_process_examiner_text, 
     stream_summarize_document, 
     transcribe_audio, 
-    generate_semantic_filename
+    generate_semantic_filename,
+    test_ai_connection
 )
 from app.services.s3_storage import S3StorageService
 from app.services.scraper import extract_urls, fetch_url_content
@@ -40,15 +41,25 @@ from app.database.db import (
     get_recent_notes_for_linking,
     get_all_notes_metadata,
     delete_notes,
-    commit_db
+    commit_db,
+    get_total_notes_count,
+    get_today_notes
 )
-from app.keyboards.reply import get_cancel_keyboard, get_main_keyboard
+from app.keyboards.reply import (
+    get_cancel_keyboard,
+    get_main_keyboard,
+    MAIN_MENU_BUTTONS,
+    CANCEL_BUTTONS,
+    ALL_NAVIGATION_BUTTONS
+)
 from app.keyboards.inline import (
     get_note_actions_keyboard,
     get_note_fallback_keyboard,
     get_delete_confirm_keyboard,
     get_tags_keyboard,
-    get_search_results_inline_kb
+    get_search_results_inline_kb,
+    get_status_keyboard,
+    get_daily_format_keyboard
 )
 from app.handlers.search import search_results_cache
 from app.utils.streaming import stream_to_message
@@ -57,27 +68,6 @@ from logger import logger
 router = Router()
 storage = S3StorageService()
 
-
-MAIN_MENU_BUTTONS = {
-    "📝 Отправить заметку",
-    "🔍 Поиск / 🤖 ИИ",
-    "🔄 Полная синхронизация S3",
-}
-
-CANCEL_BUTTONS = {
-    "🔙 В главное меню",
-    "В главное меню",
-    "в главное меню",
-    "❌ Отмена",
-    "❌ отмена",
-    "отмена",
-    "Отмена",
-    "ОТМЕНА",
-    "отменить",
-    "Отменить",
-}
-
-ALL_NAVIGATION_BUTTONS = MAIN_MENU_BUTTONS | CANCEL_BUTTONS
 
 def is_bot_command(text: str) -> bool:
     if not text:
@@ -182,7 +172,7 @@ async def cmd_back(message: Message, state: FSMContext):
     await message.answer("Вы вернулись в главное меню.", reply_markup=get_main_keyboard())
 
 
-@router.message(F.text == "📝 Отправить заметку")
+@router.message(F.text.in_({"📝 Новая заметка", "📝 Отправить заметку"}))
 async def prompt_note(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
@@ -636,6 +626,7 @@ async def handle_document(message: Message, state: FSMContext, bot: Bot):
         await message.answer("Готово! Вы вернулись в главное меню 🏠", reply_markup=get_main_keyboard())
 
 
+@router.message(F.text.in_({"💰 Расходы", "Расходы"}))
 @router.message(Command("expenses"))
 async def cmd_expenses(message: Message, state: Optional[FSMContext] = None):
     """Displays expense summary for today and current month."""
@@ -680,10 +671,11 @@ async def cmd_expenses(message: Message, state: Optional[FSMContext] = None):
         await message.answer(full_text.replace("**", "").replace("_", "").replace("`", ""))
 
 
+@router.message(F.text.in_({"📅 Ежедневник", "Ежедневник"}))
 @router.message(Command("daily"))
 async def cmd_daily(message: Message, state: FSMContext):
-    """Appends note/todo to today's daily note or prompts for text."""
-    args = message.text.split(maxsplit=1) if message.text else []
+    """Appends note/todo to today's daily note or prompts for text with format choices."""
+    args = message.text.split(maxsplit=1) if message.text and message.text.startswith("/") else []
     if len(args) > 1:
         await state.clear()
         note_text = args[1].strip()
@@ -703,9 +695,29 @@ async def cmd_daily(message: Message, state: FSMContext):
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         await state.set_state(DailyState.waiting_for_text)
         await message.answer(
-            f"📅 Введите запись или задачу для ежедневника на сегодня ({today}):",
-            reply_markup=get_cancel_keyboard()
+            f"📅 Введите запись или задачу для ежедневника на сегодня ({today}):\n(или выберите формат кнопками ниже)",
+            parse_mode="Markdown",
+            reply_markup=get_daily_format_keyboard()
         )
+
+
+
+@router.callback_query(F.data.startswith("daily_fmt:"))
+async def handle_daily_format_callback(callback: CallbackQuery, state: FSMContext):
+    """Sets formatting prefix for daily note entry."""
+    fmt_type = callback.data.split(":", 1)[1]
+    if fmt_type == "todo":
+        await state.update_data(daily_prefix="- [ ] ")
+        prompt = "☑️ Введите задачу для ежедневника (будет оформлена как чекбокс `- [ ]`):"
+    elif fmt_type == "idea":
+        await state.update_data(daily_prefix="💡 ")
+        prompt = "💡 Введите идею для ежедневника:"
+    else:
+        await state.update_data(daily_prefix="")
+        prompt = "📝 Введите заметку или мысль для ежедневника:"
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(prompt)
 
 
 @router.message(
@@ -715,8 +727,12 @@ async def cmd_daily(message: Message, state: FSMContext):
     ~F.text.func(is_bot_command)
 )
 async def handle_daily_input(message: Message, state: FSMContext):
-    """Handles text input for daily note state."""
-    note_text = message.text.strip()
+    """Handles text input for daily note state with optional formatting prefix."""
+    data = await state.get_data()
+    prefix = data.get("daily_prefix", "")
+    raw_text = message.text.strip()
+    note_text = f"{prefix}{raw_text}" if prefix else raw_text
+
     filename, folder, note_id = await append_daily_note(note_text)
     now_time = datetime.datetime.now().strftime("%H:%M")
     await state.clear()
@@ -732,6 +748,7 @@ async def handle_daily_input(message: Message, state: FSMContext):
     await message.answer("Готово! Вы вернулись в главное меню 🏠", reply_markup=get_main_keyboard())
 
 
+@router.message(F.text.in_({"🏷️ Каталог тегов", "Каталог тегов"}))
 @router.message(Command("tags"))
 async def cmd_tags(message: Message, state: Optional[FSMContext] = None):
     """Lists top tags with counts and inline buttons."""
@@ -754,32 +771,108 @@ async def cmd_tags(message: Message, state: Optional[FSMContext] = None):
     )
 
 
+@router.message(F.text.in_({"⚙️ Статус и справка", "Статус и справка"}))
+@router.message(Command("status"))
 @router.message(Command("help"))
-async def cmd_help(message: Message, state: Optional[FSMContext] = None):
-    """Displays bot capabilities and command shortcuts."""
+async def cmd_status_and_help(message: Message, state: Optional[FSMContext] = None):
+    """Displays system status, AI settings, and help diagnostics."""
     if state is not None:
         await state.clear()
-    help_text = (
-        "📖 **Справка по возможностям бота:**\n\n"
-        "📝 **Заметки и файлы:**\n"
-        "• Отправьте текст, ссылку, голосовое или фото для сохранения.\n"
-        "• Поддерживается загрузка документов: `.pdf`, `.docx`, `.txt`, `.md`.\n\n"
-        "📅 **Ежедневник:**\n"
-        "• `/daily` — добавить запись в ежедневник на сегодня\n"
-        "• `/daily Текст задачи` — быстрое добавление одной строкой\n\n"
-        "💰 **Финансы:**\n"
-        "• `/expenses` — сводка расходов за сегодня и текущий месяц\n"
-        "• При наличии суммы в тексте расход фиксируется автоматически.\n\n"
-        "🏷 **Теги:**\n"
-        "• `/tags` — каталог заметок по тегам с быстрым скачиванием\n\n"
-        "🔄 **Синхронизация:**\n"
-        "• `/sync` — полная двусторонняя синхронизация с S3\n\n"
-        "❌ `/cancel` — отмена текущего действия и возврат в главное меню."
+    settings = get_settings()
+    total_notes = await get_total_notes_count()
+    today_notes = await get_today_notes()
+    today_count = len(today_notes)
+
+    proxy_info = "✅ Включен" if settings.PROXY_URL else "Отключен"
+    s3_info = f"✅ Подключено (`{settings.S3_BUCKET_NAME}`)" if settings.has_s3 else "⚠️ Не настроено"
+    audio_info = "✅ Whisper (Groq)" if settings.has_groq else "⚠️ Отключена (нет GROQ_API_KEY)"
+
+    text = (
+        "⚙️ **Статус системы и справка**\n\n"
+        f"🤖 **ИИ-провайдер:** `{settings.active_ai_provider_display}`\n"
+        f"🧠 **Модель:** `{settings.AI_MODEL}`\n"
+        f"🌐 **Прокси:** {proxy_info}\n"
+        f"📚 **Всего заметок в базе:** `{total_notes}`\n"
+        f"📝 **Заметок за сегодня:** `{today_count}`\n"
+        f"☁️ **S3 Хранилище:** {s3_info}\n"
+        f"🎧 **Транскрибация аудио:** {audio_info}\n"
+        f"⏱ **Часовой пояс:** `{settings.TIMEZONE}`\n\n"
+        "📖 **Быстрые команды:**\n"
+        "• `/daily` — ежедневник (задачи и мысли на день)\n"
+        "• `/expenses` — учет и статистика расходов\n"
+        "• `/tags` — каталог заметок по тегам\n"
+        "• `/sync` — полная синхронизация S3\n"
+        "• `/status` — статус бота и проверка связи\n\n"
+        "Нажмите кнопку ниже для проверки связи с нейросетью или синхронизации:"
     )
     try:
-        await message.answer(help_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await message.answer(text, reply_markup=get_status_keyboard(), parse_mode="Markdown")
     except TelegramBadRequest:
-        await message.answer(help_text.replace("**", ""), reply_markup=get_main_keyboard())
+        await message.answer(text.replace("**", "").replace("`", ""), reply_markup=get_status_keyboard())
+
+cmd_help = cmd_status_and_help
+cmd_status = cmd_status_and_help
+
+
+@router.callback_query(F.data == "test_ai")
+async def handle_test_ai_callback(callback: CallbackQuery):
+    """Diagnostics test pinging the active AI provider."""
+    await callback.answer("⏳ Проверяю связь с ИИ...")
+    if callback.message:
+        try:
+            await callback.message.edit_text("⏳ Отправляю тестовый запрос к ИИ-провайдеру...")
+        except Exception:
+            pass
+
+    success, msg, latency = await test_ai_connection()
+    settings = get_settings()
+    icon = "✅" if success else "❌"
+    res_text = (
+        f"{icon} **Результат проверки связи с ИИ:**\n\n"
+        f"• **Провайдер:** `{settings.active_ai_provider_display}`\n"
+        f"• **Модель:** `{settings.AI_MODEL}`\n"
+        f"• **Задержка ответа:** `{latency} сек.`\n"
+        f"• **Статус:** {msg}\n"
+    )
+    if callback.message:
+        try:
+            await callback.message.edit_text(res_text, reply_markup=get_status_keyboard(), parse_mode="Markdown")
+        except TelegramBadRequest:
+            await callback.message.edit_text(res_text.replace("**", "").replace("`", ""), reply_markup=get_status_keyboard())
+
+
+@router.callback_query(F.data == "sync_now")
+async def handle_sync_now_callback(callback: CallbackQuery):
+    """Triggers S3 sync directly from the status keyboard."""
+    await callback.answer("⏳ Запущена синхронизация...")
+    if callback.message:
+        try:
+            await callback.message.edit_text("🔄 Синхронизирую базу данных с S3 хранилищем...")
+        except Exception:
+            pass
+    try:
+        sync_res = await run_s3_sync(return_deleted=True)
+        added = sync_res[0]
+        updated = sync_res[1]
+        deleted = sync_res[2] if len(sync_res) > 2 else 0
+        del_info = f"• Удалено устаревших: **{deleted}**\n" if deleted > 0 else ""
+        res_text = (
+            f"✅ **Синхронизация S3 завершена!**\n\n"
+            f"• Добавлено заметок: **{added}**\n"
+            f"• Обновлено заметок: **{updated}**\n"
+            f"{del_info}\n"
+            f"База данных и поиск актуальны."
+        )
+        if callback.message:
+            try:
+                await callback.message.edit_text(res_text, reply_markup=get_status_keyboard(), parse_mode="Markdown")
+            except TelegramBadRequest:
+                await callback.message.edit_text(res_text.replace("**", "").replace("`", ""), reply_markup=get_status_keyboard())
+    except Exception as e:
+        logger.error(f"Ошибка синхронизации по кнопке: {e}")
+        if callback.message:
+            await callback.message.edit_text(f"❌ Ошибка синхронизации: {e}", reply_markup=get_status_keyboard())
+
 
 
 @router.callback_query(F.data.startswith("tag:"))
@@ -1071,7 +1164,7 @@ async def run_s3_sync(return_deleted: bool = False) -> Union[Tuple[int, int], Tu
 
 
 @router.message(Command("sync"))
-@router.message(F.text == "🔄 Полная синхронизация S3")
+@router.message(F.text.in_({"🔄 Синхронизация S3", "🔄 Полная синхронизация S3"}))
 async def cmd_sync_s3(message: Message, state: Optional[FSMContext] = None):
     if state is not None:
         await state.clear()

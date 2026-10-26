@@ -65,6 +65,7 @@ async def start(message: Message, state: Optional[FSMContext] = None):
         "• /expenses — сводка расходов за день и месяц\n"
         "• /tags — каталог заметок по тегам\n"
         "• /sync — синхронизация с S3\n"
+        "• /status — статус бота и проверка связи с ИИ\n"
         "• /help — подробная справка",
         reply_markup=get_main_keyboard()
     )
@@ -91,6 +92,7 @@ async def main():
             BotCommand(command="expenses", description="Сводка расходов за день и месяц"),
             BotCommand(command="tags", description="Обзор заметок по тегам"),
             BotCommand(command="sync", description="Синхронизация с S3"),
+            BotCommand(command="status", description="Статус бота и проверка связи с ИИ"),
             BotCommand(command="cancel", description="Отмена действия"),
             BotCommand(command="help", description="Справка по командам"),
         ]

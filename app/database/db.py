@@ -88,6 +88,91 @@ class RAGNote(dict):
             return tuple_vals[item]
         return super().__getitem__(item)
 
+class SearchResult(tuple):
+    """
+    A 2-tuple (filename, category) that also provides snippet and filename/category attributes.
+    Unpacks as (filename, category) for 100% backwards compatibility with existing callers and tests.
+    """
+    def __new__(cls, filename: str, category: str, snippet: str = ""):
+        obj = super().__new__(cls, (filename, category))
+        obj.snippet = snippet
+        obj.filename = filename
+        obj.category = category
+        return obj
+
+    def __repr__(self):
+        return f"SearchResult(filename={self.filename!r}, category={self.category!r}, snippet={self.snippet!r})"
+
+SEARCH_STOP_WORDS = {
+    # Russian conversational prefixes & stop words
+    "найди", "найти", "ищи", "поищи", "поиск", "искать",
+    "заметки", "заметку", "заметка", "записей", "записи", "запись",
+    "про", "о", "обо", "по", "покажи", "показать", "открой", "открыть",
+    "где", "что", "там", "в", "во", "на", "с", "со", "к", "ко", "из",
+    "мне", "мои", "моя", "мое", "мой", "все", "всё", "как",
+    # English
+    "find", "search", "note", "notes", "show", "about", "in", "my", "all"
+}
+
+def clean_search_query(query: str) -> List[str]:
+    """Tokenizes search query and filters conversational prefixes and stop words."""
+    clean_text = query.strip().replace("#", " ")
+    raw_tokens = [t.strip('-') for t in re.findall(r'[\w\-]+', clean_text) if t.strip('-')]
+    tokens = [t for t in raw_tokens if len(t) >= 2]
+    meaningful = [t for t in tokens if t.lower() not in SEARCH_STOP_WORDS]
+    if meaningful:
+        return meaningful
+    if tokens:
+        return tokens
+    if raw_tokens:
+        return raw_tokens
+    stripped = query.strip()
+    return [stripped] if stripped else []
+
+def sanitize_fts_token(token: str) -> str:
+    """Strips FTS5 special operators to avoid query syntax errors."""
+    return re.sub(r'[^\w]', '', token)
+
+def extract_snippet(content: str, keywords: List[str], max_chars: int = 120) -> str:
+    """Extracts a short preview of the text around the matched keywords, stripping frontmatter."""
+    clean = strip_frontmatter(content).replace("\r\n", " ").replace("\n", " ").strip()
+    if not clean:
+        return ""
+
+    earliest_pos = -1
+    for kw in keywords:
+        pos = clean.lower().find(kw.lower())
+        if pos != -1 and (earliest_pos == -1 or pos < earliest_pos):
+            earliest_pos = pos
+
+    if earliest_pos == -1:
+        snippet = clean[:max_chars].strip()
+        return f"{snippet}..." if len(clean) > max_chars else snippet
+
+    start = max(0, earliest_pos - 30)
+    end = min(len(clean), earliest_pos + max_chars - 30)
+    snippet = clean[start:end].strip()
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(clean) else ""
+    return f"{prefix}{snippet}{suffix}"
+
+def get_search_stem(word: str) -> str:
+    """Strips common Russian inflectional endings for better keyword matching across cases."""
+    w = word.lower().strip()
+    if len(w) < 4:
+        return w
+    ENDINGS = (
+        'ями', 'ами', 'ого', 'его', 'ому', 'ему', 'ыми', 'ими', 'ых', 'их',
+        'ей', 'ов', 'ев', 'ах', 'ях', 'ом', 'ем', 'ой', 'ею', 'ью',
+        'ам', 'ям', 'а', 'я', 'о', 'е', 'ы', 'и', 'у', 'ю'
+    )
+    for end in ENDINGS:
+        if w.endswith(end) and len(w) - len(end) >= 3:
+            return w[:-len(end)]
+    return w
+
+
+
 class DatabaseManager:
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or get_settings().DB_PATH
@@ -117,6 +202,18 @@ class DatabaseManager:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
+
+    async def _ensure_fts_status(self, conn: aiosqlite.Connection) -> bool:
+        if not self._fts_available:
+            try:
+                async with conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes_fts'"
+                ) as cursor:
+                    if await cursor.fetchone():
+                        self._fts_available = True
+            except Exception:
+                pass
+        return self._fts_available
 
     async def init_db(self):
         conn = await self.get_connection()
@@ -154,12 +251,16 @@ class DatabaseManager:
         """)
 
         # Automatic schema migration for existing databases
-        cursor = await conn.execute("PRAGMA table_info(notes_log);")
-        columns = [row[1] for row in await cursor.fetchall()]
-        if "etag" not in columns:
-            await conn.execute("ALTER TABLE notes_log ADD COLUMN etag TEXT;")
-        if "last_modified" not in columns:
-            await conn.execute("ALTER TABLE notes_log ADD COLUMN last_modified TIMESTAMP;")
+        try:
+            cursor = await conn.execute("PRAGMA table_info(notes_log);")
+            columns = [row[1] for row in await cursor.fetchall()]
+            if "etag" not in columns:
+                await conn.execute("ALTER TABLE notes_log ADD COLUMN etag TEXT;")
+            if "last_modified" not in columns:
+                await conn.execute("ALTER TABLE notes_log ADD COLUMN last_modified TIMESTAMP;")
+            await conn.commit()
+        except Exception as e:
+            logger.warning(f"Error checking/migrating notes_log schema: {e}")
 
         # Create indexes for high-performance querying
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders(remind_time)")
@@ -390,41 +491,86 @@ class DatabaseManager:
         async with conn.execute(sql, params) as cursor:
             return (await cursor.fetchone()) is not None
 
-    async def search_notes(self, query: str, limit: int = 50) -> List[Tuple[str, str]]:
-        clean_query = query.strip().replace("#", "")
-        if not clean_query:
+    async def search_notes(self, query: str, limit: int = 50) -> List[SearchResult]:
+        keywords = clean_search_query(query)
+        if not keywords:
             return []
 
         conn = await self.get_connection()
+        await self._ensure_fts_status(conn)
+
+        # Build search terms with stems for flexible matching across inflectional endings
+        search_terms = []
+        for kw in keywords:
+            if kw not in search_terms:
+                search_terms.append(kw)
+            stem = get_search_stem(kw)
+            if stem != kw and stem not in search_terms:
+                search_terms.append(stem)
+
+        raw_clean = query.strip().replace("#", "").strip()
+        if raw_clean and raw_clean not in search_terms:
+            search_terms.append(raw_clean)
 
         # 1. Attempt FTS5 search if available
         if self._fts_available:
             try:
-                # Sanitize query for FTS5 syntax
-                fts_query = ' '.join(f'"{token}"*' for token in re.findall(r'\w+', clean_query))
-                if fts_query:
+                valid_tokens = [sanitize_fts_token(t) for t in search_terms if sanitize_fts_token(t)]
+                if valid_tokens:
+                    fts_query = ' OR '.join(f'"{t}"*' for t in valid_tokens)
                     async with conn.execute(
-                        "SELECT filename, category FROM notes_fts WHERE notes_fts MATCH ? LIMIT ?",
+                        """
+                        SELECT nl.filename, nl.category, nl.content
+                        FROM notes_fts fts
+                        JOIN notes_log nl ON nl.id = fts.rowid
+                        WHERE notes_fts MATCH ?
+                        ORDER BY fts.rank, nl.date DESC
+                        LIMIT ?
+                        """,
                         (fts_query, limit)
                     ) as cursor:
                         rows = await cursor.fetchall()
                         if rows:
-                            return rows
+                            return [SearchResult(r[0], r[1] or "", extract_snippet(r[2] or "", search_terms)) for r in rows]
             except Exception as e:
                 logger.debug(f"FTS5 query failed: {e}. Falling back to LIKE.")
 
         # 2. Fallback to SQL LIKE search
-        like_pattern = f"%{clean_query}%"
-        async with conn.execute(
+        conditions = []
+        params = []
+        for term in search_terms[:5]:
+            pat = f"%{term}%"
+            conditions.append("(filename LIKE ? OR tags LIKE ? OR content LIKE ?)")
+            params.extend([pat, pat, pat])
+
+        if conditions:
+            sql = f"""
+                SELECT filename, category, content FROM notes_log
+                WHERE {' OR '.join(conditions)}
+                ORDER BY date DESC
+                LIMIT ?
             """
-            SELECT filename, category FROM notes_log
-            WHERE filename LIKE ? OR tags LIKE ? OR content LIKE ?
-            ORDER BY date DESC
-            LIMIT ?
-            """,
-            (like_pattern, like_pattern, like_pattern, limit)
-        ) as cursor:
-            return await cursor.fetchall()
+            params.append(limit)
+            async with conn.execute(sql, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+                return [SearchResult(r[0], r[1] or "", extract_snippet(r[2] or "", search_terms)) for r in rows]
+
+        return []
+
+    async def search_notes_with_snippets(self, query: str, limit: int = 25) -> List[Tuple[str, str, str]]:
+        """Returns (filename, category, snippet) for matched notes."""
+        results = await self.search_notes(query, limit)
+        return [(r.filename, r.category, r.snippet) for r in results]
+
+    async def get_total_notes_count(self) -> int:
+        """Returns total number of notes indexed in SQLite."""
+        conn = await self.get_connection()
+        try:
+            async with conn.execute("SELECT COUNT(*) FROM notes_log") as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+        except Exception:
+            return 0
 
     async def get_today_notes(self) -> List[Tuple[str, str]]:
         today_prefix = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -470,17 +616,7 @@ class DatabaseManager:
         """
         clean_query = query.strip().replace("#", "")
         conn = await self.get_connection()
-
-        # Check if FTS is available in DB if flag wasn't set yet
-        if not self._fts_available:
-            try:
-                async with conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes_fts'"
-                ) as cursor:
-                    if await cursor.fetchone():
-                        self._fts_available = True
-            except Exception:
-                pass
+        await self._ensure_fts_status(conn)
 
         matched_rows: List[Tuple[Any, ...]] = []
         matched_ids = set()
@@ -513,24 +649,25 @@ class DatabaseManager:
         if self._fts_available and search_tokens:
             try:
                 # Use OR query for BM25 ranking across question terms
-                fts_query = ' OR '.join(f'"{token}"*' for token in search_tokens)
-
-                async with conn.execute(
-                    """
-                    SELECT nl.id, nl.filename, nl.category, nl.tags, nl.content, nl.date
-                    FROM notes_fts fts
-                    JOIN notes_log nl ON nl.id = fts.rowid
-                    WHERE notes_fts MATCH ?
-                    ORDER BY fts.rank, nl.date DESC
-                    LIMIT ?
-                    """,
-                    (fts_query, limit)
-                ) as cursor:
-                    rows = await cursor.fetchall()
-                    for r in rows:
-                        if r[0] not in matched_ids:
-                            matched_ids.add(r[0])
-                            matched_rows.append(r)
+                valid_fts_tokens = [sanitize_fts_token(t) for t in search_tokens if sanitize_fts_token(t)]
+                if valid_fts_tokens:
+                    fts_query = ' OR '.join(f'"{token}"*' for token in valid_fts_tokens)
+                    async with conn.execute(
+                        """
+                        SELECT nl.id, nl.filename, nl.category, nl.tags, nl.content, nl.date
+                        FROM notes_fts fts
+                        JOIN notes_log nl ON nl.id = fts.rowid
+                        WHERE notes_fts MATCH ?
+                        ORDER BY fts.rank, nl.date DESC
+                        LIMIT ?
+                        """,
+                        (fts_query, limit)
+                    ) as cursor:
+                        rows = await cursor.fetchall()
+                        for r in rows:
+                            if r[0] not in matched_ids:
+                                matched_ids.add(r[0])
+                                matched_rows.append(r)
             except Exception as e:
                 logger.debug(f"FTS5 RAG query failed: {e}. Falling back to LIKE search.")
 
@@ -806,6 +943,12 @@ async def note_exists(filename: str, category: str) -> bool:
 
 async def search_notes(query: str, limit: int = 50):
     return await db_manager.search_notes(query, limit)
+
+async def search_notes_with_snippets(query: str, limit: int = 25) -> List[Tuple[str, str, str]]:
+    return await db_manager.search_notes_with_snippets(query, limit)
+
+async def get_total_notes_count() -> int:
+    return await db_manager.get_total_notes_count()
 
 async def search_rag_context(query: str, limit: int = 5) -> List[RAGNote]:
     return await db_manager.search_rag_context(query, limit)

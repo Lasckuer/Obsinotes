@@ -1,16 +1,46 @@
-from app.keyboards.reply import get_main_keyboard, get_cancel_keyboard, get_numbers_kb, get_back_menu_kb
+from app.keyboards.reply import (
+    get_main_keyboard,
+    get_cancel_keyboard,
+    get_numbers_kb,
+    get_back_menu_kb,
+    MAIN_MENU_BUTTONS,
+    CANCEL_BUTTONS,
+    ALL_NAVIGATION_BUTTONS
+)
 from app.keyboards.inline import (
     get_search_results_inline_kb,
     get_note_actions_keyboard,
     get_delete_confirm_keyboard,
-    get_tags_keyboard
+    get_tags_keyboard,
+    get_status_keyboard,
+    get_daily_format_keyboard
 )
 
 def test_main_keyboard():
     kb = get_main_keyboard()
-    assert len(kb.keyboard) == 1
-    assert kb.keyboard[0][0].text == "📝 Отправить заметку"
-    assert kb.keyboard[0][1].text == "🔍 Поиск / 🤖 ИИ"
+    assert len(kb.keyboard) == 4
+    # Row 1
+    assert kb.keyboard[0][0].text == "📝 Новая заметка"
+    assert kb.keyboard[0][1].text == "🔍 Поиск заметок"
+    # Row 2
+    assert kb.keyboard[1][0].text == "🤖 Спросить ИИ"
+    assert kb.keyboard[1][1].text == "🏷️ Каталог тегов"
+    # Row 3
+    assert kb.keyboard[2][0].text == "📅 Ежедневник"
+    assert kb.keyboard[2][1].text == "💰 Расходы"
+    # Row 4
+    assert kb.keyboard[3][0].text == "🔄 Синхронизация S3"
+    assert kb.keyboard[3][1].text == "⚙️ Статус и справка"
+
+def test_navigation_constants():
+    assert "📝 Новая заметка" in MAIN_MENU_BUTTONS
+    assert "📝 Отправить заметку" in MAIN_MENU_BUTTONS
+    assert "🔍 Поиск заметок" in MAIN_MENU_BUTTONS
+    assert "🔍 Поиск / 🤖 ИИ" in MAIN_MENU_BUTTONS
+    assert "🔙 В главное меню" in CANCEL_BUTTONS
+    assert "❌ Отмена" in CANCEL_BUTTONS
+    assert len(ALL_NAVIGATION_BUTTONS) >= 15
+
 
 def test_cancel_keyboard():
     kb = get_cancel_keyboard()
@@ -61,4 +91,18 @@ def test_inline_keyboards():
     tag_btns = [(b.text, b.callback_data) for row in tags_kb.inline_keyboard for b in row]
     assert ("#работа (5)", "tag:работа") in tag_btns
     assert ("#личное (3)", "tag:личное") in tag_btns
+
+    # 5. Status keyboard
+    status_kb = get_status_keyboard()
+    status_cbs = [b.callback_data for row in status_kb.inline_keyboard for b in row]
+    assert "test_ai" in status_cbs
+    assert "sync_now" in status_cbs
+
+    # 6. Daily format keyboard
+    daily_kb = get_daily_format_keyboard()
+    daily_cbs = [b.callback_data for row in daily_kb.inline_keyboard for b in row]
+    assert "daily_fmt:note" in daily_cbs
+    assert "daily_fmt:todo" in daily_cbs
+    assert "daily_fmt:idea" in daily_cbs
+
 

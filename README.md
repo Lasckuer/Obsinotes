@@ -30,15 +30,33 @@ cp .env.example .env
 ```
 
 ### 2. Настройка окружения
-```bash
-В файле `.env` укажите:
+В файле `.env` укажите параметры:
 - `BOT_TOKEN`: Токен вашего бота от BotFather.
-- `REDIS_URL`: Адрес вашего Redis (для FSM состояний), если нету Redis будет использоваться MemoryStorage.
-- `S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY / S3_BUCKET_NAME`: Данные вашего S3
-- `PROXY_URL`: IP, Port, Login, Password
-- `ADMIN_ID`: Ваш ID в Telegram для получения дайджестов.
-- `GROQ_API_KEY`: Нужен для транскрибации аудио
-```
+- `ADMIN_ID`: Ваш Telegram ID для доступа и ежедневных дайджестов.
+- `S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY / S3_BUCKET_NAME`: Данные вашего S3 хранилища.
+- `PROXY_URL`: HTTP/SOCKS5 прокси (если требуется для доступа к Telegram или облачным LLM).
+
+#### Подключение ИИ (Любой провайдер на выбор):
+- **Google Gemini (Рекомендуется):**
+  Получите бесплатный ключ в [Google AI Studio](https://aistudio.google.com/) и укажите:
+  ```env
+  GEMINI_API_KEY=AIzaSy...
+  ```
+  *(Бот автоматически настроит подключение к модели `gemini-2.5-flash`)*
+- **OpenAI:**
+  ```env
+  OPENAI_API_KEY=sk-...
+  ```
+- **Groq / DeepSeek / OpenRouter:**
+  Укажите соответствующий ключ `GROQ_API_KEY`, `DEEPSEEK_API_KEY` или `OPENROUTER_API_KEY`.
+- **Локальная Ollama / Свой шлюз:**
+  ```env
+  AI_BASE_URL=http://localhost:11434/v1
+  AI_API_KEY=ollama
+  AI_MODEL=llama3:8b
+  ```
+- `GROQ_API_KEY`: Быстрая и бесплатная транскрибация аудиочерез Groq Whisper ([console.groq.com](https://console.groq.com/)).
+
 
 ### 3. Установка зависимостей
 ```bash

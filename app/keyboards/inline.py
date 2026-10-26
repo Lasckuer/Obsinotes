@@ -110,3 +110,27 @@ def get_tags_keyboard(tags_with_counts: List[Tuple[str, int]], max_tags: int = 2
     builder.adjust(2)
     return builder.as_markup()
 
+def get_status_keyboard() -> InlineKeyboardMarkup:
+    """Builds inline keyboard for bot status & diagnostics."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🧪 Проверить связь с ИИ", callback_data="test_ai")
+    )
+    builder.row(
+        InlineKeyboardButton(text="🔄 Синхронизировать сейчас", callback_data="sync_now")
+    )
+    return builder.as_markup()
+
+def get_daily_format_keyboard() -> InlineKeyboardMarkup:
+    """Builds inline keyboard for daily note quick entry formats."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📝 Мысль / Заметка", callback_data="daily_fmt:note"),
+        InlineKeyboardButton(text="☑️ Задача", callback_data="daily_fmt:todo"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="💡 Идея", callback_data="daily_fmt:idea")
+    )
+    return builder.as_markup()
+
+

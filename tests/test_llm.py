@@ -156,3 +156,150 @@ async def test_stream_answer_question():
 @pytest.mark.asyncio
 async def test_close_llm_clients():
     await close_llm_clients()
+
+def test_ai_provider_resolution(monkeypatch):
+    from app.config import reload_settings
+
+    # 1. Gemini auto-detection from GEMINI_API_KEY
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    monkeypatch.delenv("AI_BASE_URL", raising=False)
+    monkeypatch.delenv("AI_MODEL", raising=False)
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyFakeGeminiKey")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    s = reload_settings()
+    assert s.AI_PROVIDER == "gemini"
+    assert "generativelanguage.googleapis.com" in s.AI_BASE_URL
+    assert s.AI_MODEL == "gemini-2.5-flash"
+    assert s.AI_API_KEY == "AIzaSyFakeGeminiKey"
+    assert s.active_ai_provider_display == "Google Gemini"
+
+    # 2. OpenAI explicit provider
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-openai")
+    s = reload_settings()
+    assert s.AI_PROVIDER == "openai"
+    assert s.AI_BASE_URL == "https://api.openai.com/v1"
+    assert s.AI_MODEL == "gpt-4o-mini"
+    assert s.AI_API_KEY == "sk-fake-openai"
+    assert s.active_ai_provider_display == "OpenAI"
+
+    # 3. Groq explicit provider
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("AI_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_fake_groq")
+    s = reload_settings()
+    assert s.AI_PROVIDER == "groq"
+    assert s.AI_BASE_URL == "https://api.groq.com/openai/v1"
+    assert s.AI_MODEL == "llama-3.3-70b-versatile"
+    assert s.AI_API_KEY == "gsk_fake_groq"
+
+    # 4. Ollama explicit provider with custom model override
+    monkeypatch.setenv("AI_PROVIDER", "ollama")
+    monkeypatch.setenv("AI_MODEL", "qwen2.5:7b")
+    s = reload_settings()
+    assert s.AI_PROVIDER == "ollama"
+    assert s.AI_BASE_URL == "http://localhost:11434/v1"
+    assert s.AI_MODEL == "qwen2.5:7b"
+    assert s.AI_API_KEY == "ollama"
+
+@pytest.mark.asyncio
+async def test_test_ai_connection_success():
+    from app.services.llm import test_ai_connection
+    mock_resp = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
+
+    with patch("app.services.llm.get_llm_client", return_value=mock_client):
+        success, msg, latency = await test_ai_connection()
+        assert success is True
+        assert "успешно" in msg.lower()
+        assert latency >= 0.0
+
+@pytest.mark.asyncio
+async def test_test_ai_connection_auth_error():
+    from app.services.llm import test_ai_connection
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=Exception("401 Unauthorized: Invalid API Key"))
+
+    with patch("app.services.llm.get_llm_client", return_value=mock_client):
+        success, msg, latency = await test_ai_connection()
+        assert success is False
+        assert "Ошибка авторизации" in msg
+
+@pytest.mark.asyncio
+async def test_get_llm_client_uses_proxy(monkeypatch):
+    from app.config import reload_settings
+    import app.services.llm as llm_mod
+
+    await llm_mod.close_llm_clients()
+    monkeypatch.setenv("PROXY_URL", "http://user:pass@proxy.example.com:8080")
+    reload_settings()
+
+    client = llm_mod.get_llm_client()
+    assert client is not None
+    assert llm_mod._internal_http_client is not None
+    # Clean up
+    await llm_mod.close_llm_clients()
+    monkeypatch.delenv("PROXY_URL", raising=False)
+    reload_settings()
+
+def test_provider_presets_override_legacy_env_defaults(monkeypatch):
+    from app.config import reload_settings
+
+    # Simulate an existing .env that contained the old default gateway settings
+    monkeypatch.setenv("AI_BASE_URL", "https://api-ai.lkserv.ru/v1")
+    monkeypatch.setenv("AI_API_KEY", "ollama")
+    monkeypatch.setenv("AI_MODEL", "gemma4:e2b")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyGeminiOverrideKey")
+
+    s = reload_settings()
+    assert s.AI_PROVIDER == "gemini"
+    assert "generativelanguage.googleapis.com" in s.AI_BASE_URL
+    assert s.AI_MODEL == "gemini-2.5-flash"
+    assert s.AI_API_KEY == "AIzaSyGeminiOverrideKey"
+
+    # Clean up
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_BASE_URL", raising=False)
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_MODEL", raising=False)
+    reload_settings()
+
+@pytest.mark.asyncio
+async def test_test_ai_connection_gemini_auth_error():
+    from app.services.llm import test_ai_connection
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(
+        side_effect=Exception("Error code: 400 - API key not valid. Please pass a valid API key.")
+    )
+
+    with patch("app.services.llm.get_llm_client", return_value=mock_client):
+        success, msg, latency = await test_ai_connection()
+        assert success is False
+        assert "Ошибка авторизации" in msg
+
+def test_parse_json_safely_embedded_in_fences():
+    from app.services.llm import parse_json_safely
+
+    text = (
+        "Here is the processed note according to your schema:\n"
+        "```json\n"
+        "{\n"
+        '  "category": "Notes",\n'
+        '  "filename": "План на день.md",\n'
+        '  "tags": ["daily", "plans"]\n'
+        "}\n"
+        "```\n"
+        "Please let me know if you need more changes."
+    )
+    result = parse_json_safely(text)
+    assert result.get("category") == "Notes"
+    assert result.get("filename") == "План на день.md"
+    assert result.get("tags") == ["daily", "plans"]
+
+
