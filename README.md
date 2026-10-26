@@ -36,26 +36,35 @@ cp .env.example .env
 - `S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY / S3_BUCKET_NAME`: Данные вашего S3 хранилища.
 - `PROXY_URL`: HTTP/SOCKS5 прокси (если требуется для доступа к Telegram или облачным LLM).
 
-#### Подключение ИИ (Любой провайдер на выбор):
+#### Подключение ИИ и выбор модели:
+Вы можете использовать любого провайдера и указать любую модель через переменную `AI_MODEL` в `.env`:
+
 - **Google Gemini (Рекомендуется):**
   Получите бесплатный ключ в [Google AI Studio](https://aistudio.google.com/) и укажите:
   ```env
   GEMINI_API_KEY=AIzaSy...
+  # Опционально: любая модель (gemini-2.5-flash, gemini-1.5-flash, gemini-2.5-pro, gemini-2.0-flash)
+  AI_MODEL=gemini-2.5-flash
   ```
-  *(Бот автоматически настроит подключение к модели `gemini-2.5-flash`)*
 - **OpenAI:**
   ```env
   OPENAI_API_KEY=sk-...
+  AI_MODEL=gpt-4o-mini  # или gpt-4o, o3-mini
   ```
-- **Groq / DeepSeek / OpenRouter:**
-  Укажите соответствующий ключ `GROQ_API_KEY`, `DEEPSEEK_API_KEY` или `OPENROUTER_API_KEY`.
+- **DeepSeek:**
+  ```env
+  DEEPSEEK_API_KEY=sk-...
+  AI_MODEL=deepseek-chat  # или deepseek-reasoner
+  ```
+- **Groq / OpenRouter:**
+  Укажите соответствующий ключ `GROQ_API_KEY` или `OPENROUTER_API_KEY` и при необходимости `AI_MODEL=...`.
 - **Локальная Ollama / Свой шлюз:**
   ```env
   AI_BASE_URL=http://localhost:11434/v1
   AI_API_KEY=ollama
   AI_MODEL=llama3:8b
   ```
-- `GROQ_API_KEY`: Быстрая и бесплатная транскрибация аудиочерез Groq Whisper ([console.groq.com](https://console.groq.com/)).
+- `GROQ_API_KEY`: Быстрая и бесплатная транскрибация аудио через Groq Whisper ([console.groq.com](https://console.groq.com/)).
 
 
 ### 3. Установка зависимостей

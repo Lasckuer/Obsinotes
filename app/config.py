@@ -119,6 +119,12 @@ class Settings(BaseModel):
     OPENROUTER_API_KEY: Optional[str] = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY") or None)
     GROQ_API_KEY: Optional[str] = Field(default_factory=lambda: os.getenv("GROQ_API_KEY") or None)
 
+    # Specific provider model overrides
+    GEMINI_MODEL: Optional[str] = Field(default_factory=lambda: os.getenv("GEMINI_MODEL") or None)
+    OPENAI_MODEL: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_MODEL") or None)
+    DEEPSEEK_MODEL: Optional[str] = Field(default_factory=lambda: os.getenv("DEEPSEEK_MODEL") or None)
+    OPENROUTER_MODEL: Optional[str] = Field(default_factory=lambda: os.getenv("OPENROUTER_MODEL") or None)
+
     # Resolved LLM Settings
     AI_BASE_URL: str = Field(default_factory=lambda: os.getenv("AI_BASE_URL", ""))
     AI_API_KEY: str = Field(default_factory=lambda: os.getenv("AI_API_KEY", ""))
@@ -153,8 +159,24 @@ class Settings(BaseModel):
         if not self.AI_BASE_URL or (provider != "custom" and self.AI_BASE_URL == LEGACY_GATEWAY_URL):
             self.AI_BASE_URL = preset["base_url"]
 
-        # 3. Resolve AI_MODEL
-        if not self.AI_MODEL or (provider != "custom" and self.AI_MODEL == LEGACY_MODEL and provider != "ollama"):
+        # 3. Resolve AI_MODEL (allows user to specify any model via AI_MODEL or provider-specific var)
+        specific_model = None
+        if provider == "gemini":
+            specific_model = self.GEMINI_MODEL
+        elif provider == "openai":
+            specific_model = self.OPENAI_MODEL
+        elif provider == "deepseek":
+            specific_model = self.DEEPSEEK_MODEL
+        elif provider == "openrouter":
+            specific_model = self.OPENROUTER_MODEL
+
+        if specific_model:
+            self.AI_MODEL = specific_model
+        elif self.AI_MODEL and (provider == "custom" or provider == "ollama" or self.AI_MODEL != LEGACY_MODEL):
+            # User explicitly defined their desired AI_MODEL via .env
+            pass
+        else:
+            # Fall back to provider recommended default model
             self.AI_MODEL = preset["model"]
 
         # 4. Resolve AI_API_KEY

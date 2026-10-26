@@ -303,3 +303,49 @@ def test_parse_json_safely_embedded_in_fences():
     assert result.get("tags") == ["daily", "plans"]
 
 
+def test_custom_ai_model_env_override(monkeypatch):
+    """Verifies that user-specified AI_MODEL and provider-specific model variables override defaults."""
+    from app.config import reload_settings
+
+    # 1. Custom AI_MODEL for Google Gemini
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyCustomKey")
+    monkeypatch.setenv("AI_MODEL", "gemini-1.5-pro")
+    s = reload_settings()
+    assert s.AI_PROVIDER == "gemini"
+    assert s.AI_MODEL == "gemini-1.5-pro"
+
+    # 2. Specific GEMINI_MODEL override
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0-flash")
+    s = reload_settings()
+    assert s.AI_MODEL == "gemini-2.0-flash"
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    # 3. Custom AI_MODEL for OpenAI
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-custom-openai")
+    monkeypatch.setenv("AI_MODEL", "gpt-4o")
+    s = reload_settings()
+    assert s.AI_PROVIDER == "openai"
+    assert s.AI_MODEL == "gpt-4o"
+
+    # 4. Specific OPENAI_MODEL override
+    monkeypatch.setenv("OPENAI_MODEL", "o3-mini")
+    s = reload_settings()
+    assert s.AI_MODEL == "o3-mini"
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+
+    # 5. Custom AI_MODEL for DeepSeek
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek")
+    monkeypatch.setenv("AI_MODEL", "deepseek-reasoner")
+    s = reload_settings()
+    assert s.AI_PROVIDER == "deepseek"
+    assert s.AI_MODEL == "deepseek-reasoner"
+
+    # Cleanup
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("AI_MODEL", raising=False)
+    reload_settings()
+
+
+
