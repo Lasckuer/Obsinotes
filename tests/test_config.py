@@ -31,3 +31,28 @@ def test_settings_with_env(monkeypatch):
     assert settings.has_groq is True
     assert settings.GROQ_API_KEY == "gsk_test_123"
     assert settings.OBSIDIAN_VAULT_NAME == "WorkVault"
+
+
+def test_proxy_url_normalization(monkeypatch):
+    from app.config import normalize_proxy_url
+
+    # Standard formats
+    assert normalize_proxy_url("http://user:pass@1.2.3.4:8080") == "http://user:pass@1.2.3.4:8080"
+    assert normalize_proxy_url("socks5://1.2.3.4:1080") == "socks5://1.2.3.4:1080"
+
+    # Common Russian proxy vendor format (ip:port:user:pass)
+    assert normalize_proxy_url("185.100.1.1:8000:admin:secret") == "http://admin:secret@185.100.1.1:8000"
+
+    # user:pass@ip:port without scheme
+    assert normalize_proxy_url("admin:secret@185.100.1.1:8000") == "http://admin:secret@185.100.1.1:8000"
+
+    # raw ip:port without scheme
+    assert normalize_proxy_url("185.100.1.1:8000") == "http://185.100.1.1:8000"
+
+    # In Settings class
+    monkeypatch.setenv("PROXY_URL", "185.100.1.1:8000:admin:secret")
+    settings = reload_settings()
+    assert settings.PROXY_URL == "http://admin:secret@185.100.1.1:8000"
+    monkeypatch.delenv("PROXY_URL", raising=False)
+    reload_settings()
+

@@ -44,6 +44,33 @@ def _parse_admin_id(raw_val: Any) -> Optional[int]:
             return int(v)
     return None
 
+def normalize_proxy_url(raw_val: Any) -> Optional[str]:
+    """
+    Normalizes various proxy URL formats:
+    - http://user:pass@ip:port -> unchanged
+    - socks5://user:pass@ip:port -> unchanged
+    - socks5h://user:pass@ip:port -> unchanged
+    - ip:port:user:pass -> http://user:pass@ip:port
+    - user:pass@ip:port -> http://user:pass@ip:port
+    - ip:port -> http://ip:port
+    """
+    if raw_val is None:
+        return None
+    val = str(raw_val).strip()
+    if not val:
+        return None
+    if "://" in val:
+        return val
+    parts = val.split(":")
+    if len(parts) == 4:
+        ip, port, user, password = parts
+        return f"http://{user}:{password}@{ip}:{port}"
+    if "@" in val:
+        return f"http://{val}"
+    if len(parts) == 2 and parts[1].isdigit():
+        return f"http://{val}"
+    return f"http://{val}"
+
 PROVIDER_DEFAULTS: Dict[str, Dict[str, str]] = {
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -91,8 +118,13 @@ class Settings(BaseModel):
     ALLOWED_USERS: Set[int] = Field(
         default_factory=lambda: _parse_allowed_users(os.getenv("ALLOWED_USERS"))
     )
-    PROXY_URL: Optional[str] = Field(default_factory=lambda: os.getenv("PROXY_URL") or None)
+    PROXY_URL: Optional[str] = Field(default_factory=lambda: normalize_proxy_url(os.getenv("PROXY_URL")))
     REDIS_URL: Optional[str] = Field(default_factory=lambda: os.getenv("REDIS_URL") or None)
+
+    @field_validator("PROXY_URL", mode="before")
+    @classmethod
+    def validate_proxy_url(cls, v: Any) -> Optional[str]:
+        return normalize_proxy_url(v)
 
     @field_validator("ADMIN_ID", mode="before")
     @classmethod

@@ -18,22 +18,29 @@ _internal_http_client: Optional[httpx.AsyncClient] = None
 _external_http_client: Optional[httpx.AsyncClient] = None
 _client: Optional[AsyncOpenAI] = None
 _audio_client: Optional[AsyncOpenAI] = None
+_cached_proxy: Optional[str] = None
 
 def get_llm_client() -> AsyncOpenAI:
-    global _client, _internal_http_client
+    global _client, _internal_http_client, _cached_proxy
     settings = get_settings()
     proxy = settings.PROXY_URL if settings.PROXY_URL else None
 
-    # Invalidate cached client if settings (e.g. provider URL, key) changed
+    # Invalidate cached client if settings (e.g. provider URL, key, or proxy) changed
     if _client is not None:
         base_match = str(_client.base_url).rstrip('/') == str(settings.AI_BASE_URL).rstrip('/')
         key_match = _client.api_key == settings.AI_API_KEY
-        if not (base_match and key_match):
+        proxy_match = _cached_proxy == proxy
+        if not (base_match and key_match and proxy_match):
             _client = None
             _internal_http_client = None
 
     if _client is None:
-        _internal_http_client = httpx.AsyncClient(proxy=proxy, timeout=60.0)
+        _cached_proxy = proxy
+        _internal_http_client = httpx.AsyncClient(
+            proxy=proxy,
+            timeout=httpx.Timeout(connect=25.0, read=90.0, write=25.0, pool=25.0),
+            follow_redirects=True
+        )
         _client = AsyncOpenAI(
             api_key=settings.AI_API_KEY,
             base_url=settings.AI_BASE_URL,
@@ -49,6 +56,7 @@ async def test_ai_connection() -> Tuple[bool, str, float]:
     settings = get_settings()
     client = get_llm_client()
     start_time = asyncio.get_event_loop().time()
+    test_timeout = 40.0
     try:
         response = await asyncio.wait_for(
             client.chat.completions.create(
@@ -57,13 +65,22 @@ async def test_ai_connection() -> Tuple[bool, str, float]:
                 max_tokens=5,
                 temperature=0.0
             ),
-            timeout=15.0
+            timeout=test_timeout
         )
         latency = asyncio.get_event_loop().time() - start_time
         return True, "Связь с моделью успешно установлена!", round(latency, 2)
     except asyncio.TimeoutError:
         latency = asyncio.get_event_loop().time() - start_time
-        return False, "Таймаут подключения (сервер не ответил за 15 секунд). Проверьте PROXY_URL или интернет.", round(latency, 2)
+        hints = [
+            f"Таймаут подключения (сервер не ответил за {int(test_timeout)} сек).",
+            "Возможные причины:",
+            f"1. Неверное или несуществующее имя модели: '{settings.AI_MODEL}'."
+        ]
+        if settings.AI_PROVIDER == "gemini":
+            hints.append("   → Для Google Gemini используйте: gemini-2.5-flash, gemini-2.0-flash или gemini-1.5-flash")
+        hints.append("2. Прокси-сервер не пропускает трафик к API провайдера (generativelanguage.googleapis.com).")
+        hints.append("3. Медленное соединение прокси-сервера или высокая задержка сети.")
+        return False, "\n".join(hints), round(latency, 2)
     except Exception as e:
         latency = asyncio.get_event_loop().time() - start_time
         err_str = str(e)
@@ -77,15 +94,27 @@ async def test_ai_connection() -> Tuple[bool, str, float]:
             or "invalid_api_key" in err_lower
             or "permission_denied" in err_lower
         ):
-            msg = f"Ошибка авторизации: неверный API-ключ ({settings.active_ai_provider_display})."
-        elif "404" in err_str or "not found" in err_lower or "model_not_found" in err_lower:
-            msg = f"Модель '{settings.AI_MODEL}' не найдена у провайдера {settings.active_ai_provider_display}."
-        elif "429" in err_str or "quota" in err_lower or "rate limit" in err_lower:
-            msg = "Превышен лимит запросов (Rate Limit / Quota Exceeded)."
-        elif "proxy" in err_lower:
-            msg = f"Ошибка прокси-сервера ({settings.PROXY_URL}). Проверьте настройки PROXY_URL."
+            msg = f"Ошибка авторизации: неверный API-ключ ({settings.active_ai_provider_display}). Проверьте GEMINI_API_KEY в .env."
+        elif "404" in err_str or "not found" in err_lower or "model_not_found" in err_lower or "not supported for generatecontent" in err_lower:
+            msg = (
+                f"Модель '{settings.AI_MODEL}' не найдена у провайдера {settings.active_ai_provider_display}.\n"
+                f"Укажите в .env корректную модель, например:\n"
+                f"• AI_MODEL=gemini-2.5-flash\n"
+                f"• AI_MODEL=gemini-2.0-flash\n"
+                f"• AI_MODEL=gemini-1.5-flash"
+            )
+        elif "429" in err_str or "quota" in err_lower or "rate limit" in err_lower or "resource_exhausted" in err_lower:
+            msg = "Превышен лимит запросов к ИИ (Rate Limit / Quota Exceeded). Подождите минуту."
+        elif "user location is not supported" in err_lower or "location" in err_lower:
+            msg = (
+                f"Географическое ограничение Google Gemini (User location not supported).\n"
+                f"Ваш прокси ({settings.PROXY_URL or 'не задан'}) находится в неподдерживаемом регионе или трафик идет напрямую из РФ.\n"
+                f"Используйте рабочий европейский/американский HTTP или SOCKS5 прокси в PROXY_URL."
+            )
+        elif "proxy" in err_lower or "connecterror" in err_lower or "connection refused" in err_lower:
+            msg = f"Ошибка подключения через прокси ({settings.PROXY_URL}). Проверьте доступность и формат PROXY_URL в .env."
         else:
-            msg = f"Ошибка подключения к {settings.active_ai_provider_display}: {err_str[:150]}"
+            msg = f"Ошибка подключения к {settings.active_ai_provider_display}: {err_str[:200]}"
         return False, msg, round(latency, 2)
 
 def get_audio_client() -> Optional[AsyncOpenAI]:
@@ -161,7 +190,17 @@ async def _stream_generation(prompt: str, temperature: float, max_tokens: int, f
                 yield chunk.choices[0].delta.content
     except Exception as e:
         log_llm_error(f"{e}")
-        yield fallback_text
+        err_lower = str(e).lower()
+        if "404" in err_lower or "not found" in err_lower or "not supported for generatecontent" in err_lower:
+            yield f"❌ Ошибка: модель '{settings.AI_MODEL}' не найдена. Проверьте AI_MODEL в .env (рекомендуется: gemini-2.5-flash, gemini-2.0-flash, gemini-1.5-flash)."
+        elif "timeout" in err_lower:
+            yield "❌ Ошибка: таймаут ответа от нейросети. Проверьте PROXY_URL и скорость соединения."
+        elif "user location is not supported" in err_lower:
+            yield "❌ Ошибка Google Gemini: регион не поддерживается. Убедитесь, что настроен рабочий зарубежный PROXY_URL."
+        elif "401" in err_lower or "unauthorized" in err_lower or "api key not valid" in err_lower or "api_key_invalid" in err_lower:
+            yield f"❌ Ошибка авторизации: проверьте API-ключ {settings.active_ai_provider_display} в .env."
+        else:
+            yield fallback_text
 
 async def process_text(
     text: str,

@@ -348,4 +348,82 @@ def test_custom_ai_model_env_override(monkeypatch):
     reload_settings()
 
 
+@pytest.mark.asyncio
+async def test_test_ai_connection_timeout(monkeypatch):
+    import asyncio
+    from app.services.llm import test_ai_connection
+    from app.config import reload_settings
+
+    monkeypatch.setenv("AI_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyTestKey")
+    reload_settings()
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=asyncio.TimeoutError())
+
+    with patch("app.services.llm.get_llm_client", return_value=mock_client):
+        success, msg, latency = await test_ai_connection()
+        assert success is False
+        assert "Таймаут подключения" in msg
+        assert "gemini-2.5-flash" in msg
+
+    # Cleanup
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    reload_settings()
+
+
+@pytest.mark.asyncio
+async def test_test_ai_connection_location_error():
+    from app.services.llm import test_ai_connection
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=Exception("User location is not supported for the API use."))
+
+    with patch("app.services.llm.get_llm_client", return_value=mock_client):
+        success, msg, latency = await test_ai_connection()
+        assert success is False
+        assert "Географическое ограничение" in msg
+        assert "User location not supported" in msg
+
+
+@pytest.mark.asyncio
+async def test_test_ai_connection_model_not_found():
+    from app.services.llm import test_ai_connection
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=Exception("404 models/gemini-3.5-flash-lite is not found for API version v1beta"))
+
+    with patch("app.services.llm.get_llm_client", return_value=mock_client):
+        success, msg, latency = await test_ai_connection()
+        assert success is False
+        assert "не найдена" in msg
+        assert "gemini-2.5-flash" in msg
+
+
+@pytest.mark.asyncio
+async def test_get_llm_client_invalidates_on_proxy_change(monkeypatch):
+    from app.config import reload_settings
+    import app.services.llm as llm_mod
+
+    await llm_mod.close_llm_clients()
+    monkeypatch.setenv("PROXY_URL", "http://proxy1:8080")
+    reload_settings()
+    c1 = llm_mod.get_llm_client()
+    assert llm_mod._cached_proxy == "http://proxy1:8080"
+
+    # Change proxy
+    monkeypatch.setenv("PROXY_URL", "http://proxy2:9090")
+    reload_settings()
+    c2 = llm_mod.get_llm_client()
+    assert llm_mod._cached_proxy == "http://proxy2:9090"
+    assert c2 is not c1
+
+    # Cleanup
+    await llm_mod.close_llm_clients()
+    monkeypatch.delenv("PROXY_URL", raising=False)
+    reload_settings()
+
+
+
 
