@@ -52,6 +52,49 @@ def extract_tags_from_note(content: Optional[str]) -> str:
 
     return ", ".join(sorted(tags))
 
+def extract_date_from_note(content: Optional[str]) -> Optional[str]:
+    """Extracts date from YAML frontmatter (e.g. date: YYYY-MM-DD or created: YYYY-MM-DD)."""
+    if not content:
+        return None
+    text = content.lstrip('\ufeff')
+    fm_match = re.search(r'^\s*---\s*[\r\n]+(.*?)[\r\n]+(?:---|\.\.\.)', text, flags=re.DOTALL)
+    if fm_match:
+        fm_text = fm_match.group(1)
+        date_match = re.search(r'(?:date|created):\s*["\']?(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?)["\']?', fm_text, flags=re.IGNORECASE)
+        if date_match:
+            d_str = date_match.group(1).replace("T", " ")
+            if len(d_str) == 10:
+                d_str += " 12:00:00"
+            elif len(d_str) == 16:
+                d_str += ":00"
+            return d_str
+        ru_match = re.search(r'(?:date|created):\s*["\']?(\d{1,2})\.(\d{1,2})\.(\d{4})["\']?', fm_text, flags=re.IGNORECASE)
+        if ru_match:
+            d, m, y = ru_match.groups()
+            return f"{y}-{int(m):02d}-{int(d):02d} 12:00:00"
+    return None
+
+def parse_iso_datetime(dt_str: Optional[str]) -> Optional[str]:
+    """Parses ISO timestamp (e.g. from S3 last_modified) to YYYY-MM-DD HH:MM:SS."""
+    if not dt_str:
+        return None
+    s = str(dt_str).strip()
+    match = re.search(r'(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})', s)
+    if match:
+        return f"{match.group(1)} {match.group(2)}"
+    date_match = re.search(r'(\d{4}-\d{2}-\d{2})', s)
+    if date_match:
+        return f"{date_match.group(1)} 12:00:00"
+    return None
+
+def _sync_reminders_backup():
+    """Triggers background backup of reminders to S3 if configured."""
+    try:
+        from app.services.reminders_sync import trigger_reminders_backup
+        trigger_reminders_backup()
+    except Exception:
+        pass
+
 class RAGNote(dict):
     """
     Dictionary containing note metadata and clean content,
@@ -318,6 +361,7 @@ class DatabaseManager:
             (user_id, text, remind_time, recur_minutes)
         )
         await conn.commit()
+        _sync_reminders_backup()
 
     async def get_due_reminders(self, current_time: str) -> List[Tuple[int, int, str, int]]:
         conn = await self.get_connection()
@@ -331,11 +375,13 @@ class DatabaseManager:
         conn = await self.get_connection()
         await conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
         await conn.commit()
+        _sync_reminders_backup()
 
     async def update_reminder_time(self, r_id: int, next_time: str):
         conn = await self.get_connection()
         await conn.execute("UPDATE reminders SET remind_time = ? WHERE id = ?", (next_time, r_id))
         await conn.commit()
+        _sync_reminders_backup()
 
     async def get_user_reminders(self, user_id: int) -> List[Dict[str, Any]]:
         conn = await self.get_connection()
@@ -379,6 +425,8 @@ class DatabaseManager:
             (new_text, reminder_id, user_id)
         )
         await conn.commit()
+        if cursor.rowcount > 0:
+            _sync_reminders_backup()
         return cursor.rowcount > 0
 
     async def update_reminder_datetime(
@@ -400,6 +448,8 @@ class DatabaseManager:
                 (new_time, reminder_id, user_id)
             )
         await conn.commit()
+        if cursor.rowcount > 0:
+            _sync_reminders_backup()
         return cursor.rowcount > 0
 
     async def delete_user_reminder(self, reminder_id: int, user_id: int) -> bool:
@@ -409,6 +459,8 @@ class DatabaseManager:
             (reminder_id, user_id)
         )
         await conn.commit()
+        if cursor.rowcount > 0:
+            _sync_reminders_backup()
         return cursor.rowcount > 0
 
     async def add_expense(self, user_id: int, amount: float, comment: str):
@@ -462,7 +514,7 @@ class DatabaseManager:
         clean_cat = category or ""
         conn = await self.get_connection()
         async with conn.execute(
-            "SELECT id, content, etag, last_modified, tags FROM notes_log WHERE filename = ? AND (category = ? OR (? = '' AND (category IS NULL OR category = 'Root')))",
+            "SELECT id, content, etag, last_modified, tags, date FROM notes_log WHERE filename = ? AND (category = ? OR (? = '' AND (category IS NULL OR category = 'Root')))",
             (filename, clean_cat, clean_cat)
         ) as cursor:
             row = await cursor.fetchone()
@@ -470,6 +522,7 @@ class DatabaseManager:
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         lm_str = str(last_modified) if last_modified is not None else None
         inferred_tags = tags or extract_tags_from_note(content)
+        note_date = extract_date_from_note(content) or parse_iso_datetime(lm_str) or now_str
 
         if not row:
             await conn.execute(
@@ -477,18 +530,22 @@ class DatabaseManager:
                 INSERT INTO notes_log (filename, category, tags, content, date, etag, last_modified)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (filename, clean_cat, inferred_tags, content, now_str, etag, lm_str)
+                (filename, clean_cat, inferred_tags, content, note_date, etag, lm_str)
             )
             if commit:
                 await conn.commit()
             return True, False
         else:
-            note_id, old_content, old_etag, old_lm, old_tags = row[0], row[1], row[2], row[3], row[4]
+            note_id, old_content, old_etag, old_lm, old_tags, old_date = row[0], row[1], row[2], row[3], row[4], row[5]
             content_changed = (old_content != content)
             etag_changed = (etag is not None and old_etag != etag)
             lm_changed = (lm_str is not None and str(old_lm) != lm_str)
             final_tags = inferred_tags or old_tags or ""
             tags_changed = (final_tags != (old_tags or ""))
+
+            # Preserve original note creation date; only update if frontmatter explicitly specifies it
+            fm_date = extract_date_from_note(content)
+            final_date = fm_date or old_date or parse_iso_datetime(lm_str) or now_str
 
             if content_changed or etag_changed or lm_changed or tags_changed:
                 await conn.execute(
@@ -497,7 +554,7 @@ class DatabaseManager:
                     SET content = ?, tags = ?, date = ?, etag = ?, last_modified = ?
                     WHERE id = ?
                     """,
-                    (content, final_tags, now_str, etag or old_etag, lm_str or old_lm, note_id)
+                    (content, final_tags, final_date, etag or old_etag, lm_str or old_lm, note_id)
                 )
                 if commit:
                     await conn.commit()

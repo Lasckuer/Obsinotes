@@ -2,18 +2,11 @@ import datetime
 from pytz import timezone
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from app.config import get_settings
+from app.config import get_settings, get_current_timezone
 from app.database.db import get_due_reminders, delete_reminder, get_today_notes, update_reminder_time
 from app.keyboards.inline import get_reminder_notification_keyboard
 from app.handlers import messages
 from logger import logger, log_reminder_sent, log_reminder_error, log_reminder_cycled
-
-def get_current_timezone():
-    settings = get_settings()
-    try:
-        return timezone(settings.TIMEZONE)
-    except Exception:
-        return timezone('Europe/Moscow')
 
 async def check_reminders(bot: Bot):
     tz = get_current_timezone()
@@ -77,6 +70,11 @@ async def daily_digest(bot: Bot, admin_id: int):
         logger.warning("ADMIN_ID не задан. Дайджест пропущен.")
         return
 
+    settings = get_settings()
+    if not settings.ENABLE_DAILY_DIGEST:
+        logger.info("Ежедневный дайджест отключен в конфигурации.")
+        return
+
     try:
         notes = await get_today_notes()
     except Exception as e:
@@ -89,10 +87,20 @@ async def daily_digest(bot: Bot, admin_id: int):
     tz = get_current_timezone()
     today_str = datetime.datetime.now(tz).strftime("%d.%m.%Y")
 
+    display_notes = notes
+    extra_count = 0
+    if len(notes) > 30:
+        logger.warning(f"Слишком много заметок за сегодня ({len(notes)}), дайджест ограничен.")
+        display_notes = notes[:25]
+        extra_count = len(notes) - 25
+
     items = [
         f"- [{(category.replace('TelegramBot/', '') if category and category != 'Root' else 'Корень')}] {filename}"
-        for filename, category in notes
+        for filename, category in display_notes
     ]
+    if extra_count > 0:
+        items.append(f"_...и еще {extra_count} заметок_")
+
     text = f"🌙 **Дайджест за {today_str}:**\n\n" + "\n".join(items)
 
     try:

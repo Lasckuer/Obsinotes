@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/Obsidian-Compatible-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" alt="Obsidian" />
   <img src="https://img.shields.io/badge/Storage-S3%20%2F%20MinIO-E44D26?style=for-the-badge&logo=amazons3&logoColor=white" alt="S3 Storage" />
   <img src="https://img.shields.io/badge/LLM-Gemini%20%7C%20OpenAI%20%7C%20Ollama-00A67E?style=for-the-badge&logo=openai&logoColor=white" alt="Pluggable LLM" />
-  <img src="https://img.shields.io/badge/Tests-161%20Passed-brightgreen?style=for-the-badge" alt="Tests Status" />
+  <img src="https://img.shields.io/badge/Tests-167%20Passed-brightgreen?style=for-the-badge" alt="Tests Status" />
 </p>
 
 ---

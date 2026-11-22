@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.middlewares.auth import AuthMiddleware
 from app.database.db import init_db, close_db
 from app.services.s3_storage import S3StorageService
+from app.services.reminders_sync import restore_reminders_from_s3
 from app.services.llm import close_llm_clients
 from app.keyboards.reply import get_main_keyboard
 from app.handlers import messages, search
@@ -85,6 +86,12 @@ async def main():
     storage_service = S3StorageService()
     await storage_service.init_folders()
 
+    # Restore reminders from S3 if restarting on a fresh/rebuilt container
+    try:
+        await restore_reminders_from_s3(storage_service)
+    except Exception as e:
+        logger.warning(f"Ошибка восстановления напоминаний при запуске: {e}")
+
     # Register bot commands menu in Telegram
     try:
         from aiogram.types import BotCommand
@@ -110,10 +117,12 @@ async def main():
     scheduler.add_job(check_reminders, 'interval', seconds=30, args=[bot])
     scheduler.add_job(auto_sync_job, 'cron', hour=3, minute=0)
 
-    if settings.ADMIN_ID:
+    if settings.ADMIN_ID and settings.ENABLE_DAILY_DIGEST:
         scheduler.add_job(daily_digest, 'cron', hour=22, minute=0, args=[bot, settings.ADMIN_ID])
-    else:
+    elif not settings.ADMIN_ID:
         logger.warning("⚠️ ADMIN_ID не указан или некорректен в .env! Дайджест отключен.")
+    else:
+        logger.info("Ежедневный дайджест отключен в конфигурации (ENABLE_DAILY_DIGEST=false).")
 
     scheduler.start()
     log_bot_start()

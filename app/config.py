@@ -241,6 +241,9 @@ class Settings(BaseModel):
     TIMEZONE: str = Field(default_factory=lambda: os.getenv("TIMEZONE", "Europe/Moscow"))
     LOG_LEVEL: str = Field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
     LOG_FILE: str = Field(default_factory=lambda: os.getenv("LOG_FILE", "bot_log.log"))
+    ENABLE_DAILY_DIGEST: bool = Field(
+        default_factory=lambda: os.getenv("ENABLE_DAILY_DIGEST", "true").lower() in ("true", "1", "yes")
+    )
     
     # Concurrency
     S3_SYNC_CONCURRENCY: int = Field(
@@ -270,3 +273,13 @@ def reload_settings() -> Settings:
     global _settings_instance
     _settings_instance = Settings()
     return _settings_instance
+
+def get_current_timezone():
+    """Returns the configured timezone or Europe/Moscow fallback."""
+    settings = get_settings()
+    try:
+        from pytz import timezone
+        return timezone(settings.TIMEZONE)
+    except Exception:
+        from pytz import timezone
+        return timezone('Europe/Moscow')

@@ -72,7 +72,7 @@ from app.keyboards.inline import (
     get_reminder_notification_keyboard
 )
 from app.handlers.search import search_results_cache
-from app.handlers.scheduler import get_current_timezone
+from app.config import get_current_timezone
 from app.utils.streaming import stream_to_message
 from logger import logger
 
@@ -1760,6 +1760,13 @@ async def run_s3_sync(return_deleted: bool = False) -> Union[Tuple[int, int], Tu
 
     # 4. Batch DB transaction commit
     await commit_db()
+
+    # 5. Restore reminders from S3 if missing
+    try:
+        from app.services.reminders_sync import restore_reminders_from_s3
+        await restore_reminders_from_s3(storage)
+    except Exception as e:
+        logger.warning(f"Ошибка синхронизации напоминаний из S3: {e}")
 
     if return_deleted:
         return added_count, updated_count, deleted_count
