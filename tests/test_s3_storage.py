@@ -115,3 +115,18 @@ async def test_delete_file(s3_service):
             Key="Notes/test.md"
         )
 
+@pytest.mark.asyncio
+async def test_file_exists(s3_service):
+    mock_client = AsyncMock()
+    mock_client.head_object = AsyncMock(return_value={})
+
+    with patch.object(s3_service, "get_client") as mock_get_client:
+        mock_get_client.return_value.__aenter__.return_value = mock_client
+        # Existing file
+        assert await s3_service.file_exists("Notes", "exists.md") is True
+        mock_client.head_object.assert_called_with(Bucket="test-bucket", Key="Notes/exists.md")
+
+        # Non-existing file raises exception
+        mock_client.head_object.side_effect = Exception("NoSuchKey")
+        assert await s3_service.file_exists("Notes", "missing.md") is False
+

@@ -55,6 +55,20 @@ async def restore_reminders_from_s3(storage: Optional[S3StorageService] = None) 
         return 0
 
     try:
+        # Check if backup file exists in S3 before attempting download
+        if hasattr(storage, "file_exists"):
+            exists = await storage.file_exists(S3_REMINDERS_FOLDER, S3_REMINDERS_FILE)
+            if not exists:
+                logger.debug(f"Файл бэкапа {S3_REMINDERS_FOLDER}/{S3_REMINDERS_FILE} пока не создан в S3.")
+                # If local database already has reminders, create initial backup immediately
+                from app.database.db import db_manager
+                conn = await db_manager.get_connection()
+                async with conn.execute("SELECT COUNT(*) FROM reminders") as cur:
+                    c = (await cur.fetchone())[0]
+                if c > 0:
+                    await backup_reminders_to_s3(storage)
+                return 0
+
         content_bytes = await storage.download_file(S3_REMINDERS_FOLDER, S3_REMINDERS_FILE)
         if not content_bytes:
             return 0

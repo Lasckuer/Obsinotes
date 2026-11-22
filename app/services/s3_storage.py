@@ -154,6 +154,28 @@ class S3StorageService:
 
     list_files = list_files_with_metadata
 
+    async def file_exists_by_key(self, key: str) -> bool:
+        """Checks if an object exists in S3 without downloading its contents."""
+        if not self.is_configured() or not key:
+            return False
+        try:
+            async with self.get_client() as s3:
+                await s3.head_object(Bucket=self.bucket_name, Key=key)
+                return True
+        except Exception:
+            return False
+
+    async def file_exists(self, folder: str, filename: str) -> bool:
+        """Checks if folder/filename exists in S3."""
+        if not folder or folder == "Root":
+            key = filename
+        else:
+            key = f"{folder.strip('/')}/{filename}"
+        exists = await self.file_exists_by_key(key)
+        if not exists and not key.startswith("TelegramBot/"):
+            exists = await self.file_exists_by_key(f"TelegramBot/{key}")
+        return exists
+
     async def download_file_by_key(self, key: str) -> bytes:
         """Downloads and returns raw bytes of an object by its exact key."""
         if not self.is_configured():
@@ -163,7 +185,12 @@ class S3StorageService:
                 response = await s3.get_object(Bucket=self.bucket_name, Key=key)
                 return await response['Body'].read()
         except Exception as e:
-            log_s3_error(f"Download by key error '{key}': {e}")
+            err_msg = str(e)
+            err_lower = err_msg.lower()
+            if "nosuchkey" in err_lower or "404" in err_lower or "not found" in err_lower:
+                logger.debug(f"Файл '{key}' не найден в S3 (NoSuchKey).")
+            else:
+                log_s3_error(f"Download by key error '{key}': {err_msg}")
             return b""
 
     async def download_file(self, folder: str, filename: str) -> bytes:
