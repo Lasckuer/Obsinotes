@@ -30,6 +30,12 @@ from app.services.s3_storage import S3StorageService
 from app.services.scraper import extract_urls, fetch_url_content
 from app.database.db import (
     add_reminder,
+    delete_reminder,
+    get_user_reminders,
+    get_reminder_by_id,
+    update_reminder_text,
+    update_reminder_datetime,
+    delete_user_reminder,
     add_expense,
     get_expenses_summary,
     add_note_log,
@@ -59,9 +65,14 @@ from app.keyboards.inline import (
     get_tags_keyboard,
     get_search_results_inline_kb,
     get_status_keyboard,
-    get_daily_format_keyboard
+    get_daily_format_keyboard,
+    get_settings_menu_keyboard,
+    get_reminders_list_keyboard,
+    get_reminder_detail_keyboard,
+    get_reminder_notification_keyboard
 )
 from app.handlers.search import search_results_cache
+from app.handlers.scheduler import get_current_timezone
 from app.utils.streaming import stream_to_message
 from logger import logger
 
@@ -163,6 +174,117 @@ class NoteState(StatesGroup):
 
 class DailyState(StatesGroup):
     waiting_for_text = State()
+
+class ReminderManagementState(StatesGroup):
+    waiting_for_new_text = State()
+    waiting_for_new_time = State()
+    waiting_for_create_text = State()
+    waiting_for_create_time = State()
+
+def parse_user_datetime(input_text: str) -> Optional[Tuple[str, int]]:
+    """
+    Parses user input date/time string into (formatted_datetime_str, recur_minutes).
+    Supports relative offsets (+15m, +1h), times (15:00), dates (25.11.2026 15:00),
+    prefixes ('завтра в 14:00', 'сегодня в 18:00'), and recurrence.
+    """
+    if not input_text or not input_text.strip():
+        return None
+    raw = input_text.strip().lower()
+    tz = get_current_timezone()
+    now = datetime.datetime.now(tz)
+
+    recur_minutes = 0
+    recur_match = re.search(r"(?:каждые?|раз в)\s+(\d+)\s*(?:мин|минут)", raw)
+    if recur_match:
+        recur_minutes = int(recur_match.group(1))
+        raw = raw.replace(recur_match.group(0), "").strip()
+    elif "каждый час" in raw or "раз в час" in raw:
+        recur_minutes = 60
+        raw = raw.replace("каждый час", "").replace("раз в час", "").strip()
+    elif "каждый день" in raw or "ежедневно" in raw:
+        recur_minutes = 1440
+        raw = raw.replace("каждый день", "").replace("ежедневно", "").strip()
+
+    # 1. Relative: +N (м/мин/ч/час/д/дн/день)
+    rel_match = re.search(r"^\+(\d+)\s*(м|мин|минут|минуты|минута|ч|час|часа|часов|д|дн|дня|дней|день)?$", raw)
+    if rel_match:
+        val = int(rel_match.group(1))
+        unit = rel_match.group(2) or "м"
+        if unit.startswith("м"):
+            target_dt = now + datetime.timedelta(minutes=val)
+        elif unit.startswith("ч"):
+            target_dt = now + datetime.timedelta(hours=val)
+        elif unit.startswith("д"):
+            target_dt = now + datetime.timedelta(days=val)
+        else:
+            target_dt = now + datetime.timedelta(minutes=val)
+        return target_dt.strftime("%Y-%m-%d %H:%M"), recur_minutes
+
+    # 2. "завтра в HH:MM" or "завтра HH:MM"
+    tomorrow_match = re.search(r"завтра(?:\s+в)?\s+(\d{1,2}):(\d{2})", raw)
+    if tomorrow_match:
+        h, m = int(tomorrow_match.group(1)), int(tomorrow_match.group(2))
+        tomorrow = now + datetime.timedelta(days=1)
+        target_dt = tomorrow.replace(hour=h, minute=m, second=0, microsecond=0)
+        return target_dt.strftime("%Y-%m-%d %H:%M"), recur_minutes
+
+    # 3. "сегодня в HH:MM" or "сегодня HH:MM"
+    today_match = re.search(r"сегодня(?:\s+в)?\s+(\d{1,2}):(\d{2})", raw)
+    if today_match:
+        h, m = int(today_match.group(1)), int(today_match.group(2))
+        target_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if target_dt <= now:
+            target_dt += datetime.timedelta(days=1)
+        return target_dt.strftime("%Y-%m-%d %H:%M"), recur_minutes
+
+    # 4. Standard ISO: YYYY-MM-DD HH:MM
+    iso_match = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})", raw)
+    if iso_match:
+        y, mon, d, h, m = map(int, iso_match.groups())
+        try:
+            target_dt = tz.localize(datetime.datetime(y, mon, d, h, m)) if hasattr(tz, 'localize') else datetime.datetime(y, mon, d, h, m, tzinfo=tz)
+            return target_dt.strftime("%Y-%m-%d %H:%M"), recur_minutes
+        except ValueError:
+            pass
+
+    # 5. Russian date format: DD.MM.YYYY HH:MM or DD.MM.YY HH:MM
+    ru_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})\s+(\d{1,2}):(\d{2})", raw)
+    if ru_match:
+        d, mon, y, h, m = map(int, ru_match.groups())
+        if y < 100:
+            y += 2000
+        try:
+            target_dt = tz.localize(datetime.datetime(y, mon, d, h, m)) if hasattr(tz, 'localize') else datetime.datetime(y, mon, d, h, m, tzinfo=tz)
+            return target_dt.strftime("%Y-%m-%d %H:%M"), recur_minutes
+        except ValueError:
+            pass
+
+    # 6. Russian date format without year: DD.MM HH:MM
+    short_ru_match = re.search(r"(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{2})", raw)
+    if short_ru_match:
+        d, mon, h, m = map(int, short_ru_match.groups())
+        y = now.year
+        try:
+            target_dt = tz.localize(datetime.datetime(y, mon, d, h, m)) if hasattr(tz, 'localize') else datetime.datetime(y, mon, d, h, m, tzinfo=tz)
+            if target_dt < now:
+                target_dt = tz.localize(datetime.datetime(y + 1, mon, d, h, m)) if hasattr(tz, 'localize') else datetime.datetime(y + 1, mon, d, h, m, tzinfo=tz)
+            return target_dt.strftime("%Y-%m-%d %H:%M"), recur_minutes
+        except ValueError:
+            pass
+
+    # 7. Time only: HH:MM
+    time_only_match = re.search(r"^(\d{1,2}):(\d{2})$", raw)
+    if time_only_match:
+        h, m = int(time_only_match.group(1)), int(time_only_match.group(2))
+        try:
+            target_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+            if target_dt <= now:
+                target_dt += datetime.timedelta(days=1)
+            return target_dt.strftime("%Y-%m-%d %H:%M"), recur_minutes
+        except ValueError:
+            pass
+
+    return None
 
 
 @router.message(Command("cancel"))
@@ -872,6 +994,487 @@ async def handle_sync_now_callback(callback: CallbackQuery):
         logger.error(f"Ошибка синхронизации по кнопке: {e}")
         if callback.message:
             await callback.message.edit_text(f"❌ Ошибка синхронизации: {e}", reply_markup=get_status_keyboard())
+
+
+# =========================================================================
+# Settings & Hub Handlers
+# =========================================================================
+
+@router.message(F.text.in_({"⚙️ Настройки", "Настройки"}))
+@router.message(Command("settings"))
+async def cmd_settings(message: Message, state: Optional[FSMContext] = None):
+    """Displays the interactive settings hub."""
+    if state is not None:
+        await state.clear()
+    settings = get_settings()
+    total_notes = await get_total_notes_count()
+    text = (
+        "⚙️ **Центр настроек и управления**\n\n"
+        f"🤖 **ИИ:** `{settings.active_ai_provider_display}` ({settings.AI_MODEL})\n"
+        f"☁️ **S3 Vault:** `{settings.OBSIDIAN_VAULT_NAME or 'Notes'}` (`{settings.S3_BUCKET_NAME}`)\n"
+        f"📚 **Заметок в базе:** `{total_notes}`\n\n"
+        "Выберите раздел настроек или запустите действие:"
+    )
+    try:
+        await message.answer(text, reply_markup=get_settings_menu_keyboard(), parse_mode="Markdown")
+    except TelegramBadRequest:
+        await message.answer(text.replace("**", "").replace("`", ""), reply_markup=get_settings_menu_keyboard())
+
+
+@router.callback_query(F.data == "settings:status")
+async def handle_settings_status_callback(callback: CallbackQuery):
+    """Shows full system diagnostics within the settings hub."""
+    await callback.answer()
+    settings = get_settings()
+    total_notes = await get_total_notes_count()
+    today_notes = await get_today_notes()
+    today_count = len(today_notes)
+    proxy_info = "✅ Включен" if settings.PROXY_URL else "Отключен"
+    s3_info = f"✅ Подключено (`{settings.S3_BUCKET_NAME}`)" if settings.has_s3 else "⚠️ Не настроено"
+    audio_info = "✅ Whisper (Groq)" if settings.has_groq else "⚠️ Отключена (нет GROQ_API_KEY)"
+
+    text = (
+        "📊 **Подробный статус системы**\n\n"
+        f"🤖 **ИИ-провайдер:** `{settings.active_ai_provider_display}`\n"
+        f"🧠 **Модель:** `{settings.AI_MODEL}`\n"
+        f"🌐 **Прокси:** {proxy_info}\n"
+        f"📚 **Всего заметок в базе:** `{total_notes}`\n"
+        f"📝 **Заметок за сегодня:** `{today_count}`\n"
+        f"☁️ **S3 Хранилище:** {s3_info}\n"
+        f"🎧 **Транскрибация аудио:** {audio_info}\n"
+        f"⏱ **Часовой пояс:** `{settings.TIMEZONE}`\n"
+    )
+    if callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=get_settings_menu_keyboard(), parse_mode="Markdown")
+        except TelegramBadRequest:
+            await callback.message.edit_text(text.replace("**", "").replace("`", ""), reply_markup=get_settings_menu_keyboard())
+
+
+@router.callback_query(F.data == "settings:help")
+async def handle_settings_help_callback(callback: CallbackQuery):
+    """Shows command help and instructions within the settings hub."""
+    await callback.answer()
+    help_text = (
+        "ℹ️ **Справка по возможностям бота**\n\n"
+        "• **Захват мыслей:** отправьте текст, ссылку, голосовое или документ (.pdf, .docx, .txt, .md)\n"
+        "• **Поиск заметок:** кнопка «🔍 Поиск заметок» — полнотекстовый поиск по всей базе Obsidian\n"
+        "• **Спросить ИИ:** кнопка «🤖 Спросить ИИ» — RAG-ответы на естественном языке с цитированием заметок\n"
+        "• **Напоминания:** кнопка «⏰ Напоминания» — список, добавление, редактирование текста/времени и удаление\n"
+        "• **Синхронизация:** синхронизация базы с S3 для актуализации заметок на всех ваших устройствах\n\n"
+        "Команды: `/reminders`, `/settings`, `/daily`, `/expenses`, `/tags`, `/sync`, `/help`, `/cancel`"
+    )
+    if callback.message:
+        try:
+            await callback.message.edit_text(help_text, reply_markup=get_settings_menu_keyboard(), parse_mode="Markdown")
+        except TelegramBadRequest:
+            await callback.message.edit_text(help_text.replace("**", "").replace("`", ""), reply_markup=get_settings_menu_keyboard())
+
+
+# =========================================================================
+# Reminders Management Handlers
+# =========================================================================
+
+def format_reminders_list_text(reminders: List[dict]) -> str:
+    """Formats the overview list of active reminders for display."""
+    if not reminders:
+        return (
+            "⏰ **У вас нет активных напоминаний.**\n\n"
+            "Вы можете создать новое напоминание кнопкой ниже или отправить сообщение боту (например: *«напомни завтра в 10:00 позвонить врачу»*)."
+        )
+    lines = ["⏰ **Ваши активные напоминания:**\n"]
+    for idx, rem in enumerate(reminders, start=1):
+        text = rem.get("text", "")
+        clean_text = text.replace("\n", " ").strip()
+        if len(clean_text) > 80:
+            clean_text = f"{clean_text[:77]}..."
+        r_time = rem.get("remind_time", "")
+        try:
+            dt_obj = datetime.datetime.strptime(r_time, "%Y-%m-%d %H:%M")
+            disp_time = dt_obj.strftime("%d.%m.%Y %H:%M")
+        except ValueError:
+            disp_time = r_time
+        recur_mins = rem.get("recur_minutes", 0)
+        recur_str = f" 🔄 *каждые {recur_mins} мин*" if recur_mins and recur_mins > 0 else ""
+        lines.append(f"**{idx}.** {clean_text}\n    🕒 `{disp_time}`{recur_str}")
+    lines.append("\n_Нажмите на напоминание ниже для редактирования или удаления:_")
+    return "\n".join(lines)
+
+
+def format_reminder_card_text(rem: dict) -> str:
+    """Formats a single reminder's full details card."""
+    rem_id = rem["id"]
+    text = rem.get("text", "")
+    r_time = rem.get("remind_time", "")
+    try:
+        dt_obj = datetime.datetime.strptime(r_time, "%Y-%m-%d %H:%M")
+        disp_time = dt_obj.strftime("%d.%m.%Y %H:%M")
+    except ValueError:
+        disp_time = r_time
+    recur_mins = rem.get("recur_minutes", 0)
+    recur_str = f"Каждые {recur_mins} мин" if recur_mins and recur_mins > 0 else "Нет"
+    return (
+        f"📌 **Напоминание #{rem_id}**\n\n"
+        f"📝 **Текст:**\n{text}\n\n"
+        f"🕒 **Время:** `{disp_time}`\n"
+        f"🔄 **Повтор:** {recur_str}\n\n"
+        "Выберите действие:"
+    )
+
+
+@router.message(F.text.in_({"⏰ Напоминания", "Напоминания"}))
+@router.message(Command("reminders"))
+async def cmd_reminders_menu(message: Message, state: Optional[FSMContext] = None):
+    """Displays user reminders list with editing/creation/deletion controls."""
+    if state is not None:
+        await state.clear()
+    user_id = message.from_user.id
+    rems = await get_user_reminders(user_id)
+    text = format_reminders_list_text(rems)
+    kb = get_reminders_list_keyboard(rems)
+    try:
+        await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    except TelegramBadRequest:
+        await message.answer(text.replace("**", "").replace("*", "").replace("`", ""), reply_markup=kb)
+
+
+@router.callback_query(F.data == "rem:list")
+async def handle_rem_list_callback(callback: CallbackQuery, state: Optional[FSMContext] = None):
+    """Returns to the full reminders list."""
+    if state is not None:
+        await state.clear()
+    user_id = callback.from_user.id
+    rems = await get_user_reminders(user_id)
+    text = format_reminders_list_text(rems)
+    kb = get_reminders_list_keyboard(rems)
+    await callback.answer()
+    if callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        except TelegramBadRequest:
+            await callback.message.edit_text(text.replace("**", "").replace("*", "").replace("`", ""), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("rem:view:"))
+async def handle_rem_view_callback(callback: CallbackQuery, state: Optional[FSMContext] = None):
+    """Displays details and action buttons for a single reminder."""
+    if state is not None:
+        await state.clear()
+    user_id = callback.from_user.id
+    rem_id = int(callback.data.split(":")[2])
+    rem = await get_reminder_by_id(rem_id, user_id)
+    if not rem:
+        await callback.answer("⚠️ Напоминание не найдено или уже удалено.", show_alert=True)
+        rems = await get_user_reminders(user_id)
+        if callback.message:
+            await callback.message.edit_text(format_reminders_list_text(rems), reply_markup=get_reminders_list_keyboard(rems), parse_mode="Markdown")
+        return
+    await callback.answer()
+    text = format_reminder_card_text(rem)
+    kb = get_reminder_detail_keyboard(rem_id)
+    if callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        except TelegramBadRequest:
+            await callback.message.edit_text(text.replace("**", "").replace("`", ""), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("rem:edit_text:"))
+async def handle_rem_edit_text_callback(callback: CallbackQuery, state: FSMContext):
+    """Initiates prompt to edit a reminder's text."""
+    user_id = callback.from_user.id
+    rem_id = int(callback.data.split(":")[2])
+    rem = await get_reminder_by_id(rem_id, user_id)
+    if not rem:
+        await callback.answer("⚠️ Напоминание не найдено.", show_alert=True)
+        return
+    await callback.answer()
+    await state.set_state(ReminderManagementState.waiting_for_new_text)
+    await state.update_data(editing_rem_id=rem_id)
+    if callback.message:
+        await callback.message.answer(
+            f"✏️ *Редактирование текста напоминания #{rem_id}*\n\n"
+            f"Текущий текст:\n_{rem['text']}_\n\n"
+            "Отправьте новый текст сообщения:",
+            parse_mode="Markdown",
+            reply_markup=get_cancel_keyboard()
+        )
+
+
+@router.message(ReminderManagementState.waiting_for_new_text, F.text)
+async def handle_new_reminder_text_input(message: Message, state: FSMContext):
+    """Saves edited text for a reminder."""
+    if message.text in ALL_NAVIGATION_BUTTONS or is_bot_command(message.text):
+        await state.clear()
+        await message.answer("Редактирование отменено.", reply_markup=get_main_keyboard())
+        return
+
+    data = await state.get_data()
+    rem_id = data.get("editing_rem_id")
+    if not rem_id:
+        await state.clear()
+        await message.answer("Ошибка: не указано напоминание.", reply_markup=get_main_keyboard())
+        return
+
+    new_text = message.text.strip()
+    user_id = message.from_user.id
+    updated = await update_reminder_text(rem_id, user_id, new_text)
+    await state.clear()
+
+    if updated:
+        rem = await get_reminder_by_id(rem_id, user_id)
+        card_text = format_reminder_card_text(rem) if rem else ""
+        await message.answer(
+            f"✅ Текст напоминания успешно обновлен!\n\n{card_text}",
+            reply_markup=get_reminder_detail_keyboard(rem_id),
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer("❌ Не удалось обновить напоминание (возможно, оно было удалено).", reply_markup=get_main_keyboard())
+
+
+@router.callback_query(F.data.startswith("rem:edit_time:"))
+async def handle_rem_edit_time_callback(callback: CallbackQuery, state: FSMContext):
+    """Initiates prompt to edit a reminder's time."""
+    user_id = callback.from_user.id
+    rem_id = int(callback.data.split(":")[2])
+    rem = await get_reminder_by_id(rem_id, user_id)
+    if not rem:
+        await callback.answer("⚠️ Напоминание не найдено.", show_alert=True)
+        return
+    await callback.answer()
+    await state.set_state(ReminderManagementState.waiting_for_new_time)
+    await state.update_data(editing_rem_id=rem_id)
+    if callback.message:
+        await callback.message.answer(
+            f"🕒 *Изменение времени напоминания #{rem_id}*\n\n"
+            f"Текущее время: `{rem['remind_time']}`\n\n"
+            "Отправьте новое время напоминания. Поддерживаются форматы:\n"
+            "• `18:30` (сегодня или завтра)\n"
+            "• `25.11.2026 15:00`\n"
+            "• `+2 часа` или `+30 мин`\n"
+            "• `завтра в 10:00`",
+            parse_mode="Markdown",
+            reply_markup=get_cancel_keyboard()
+        )
+
+
+@router.message(ReminderManagementState.waiting_for_new_time, F.text)
+async def handle_new_reminder_time_input(message: Message, state: FSMContext):
+    """Parses and updates reminder time."""
+    if message.text in ALL_NAVIGATION_BUTTONS or is_bot_command(message.text):
+        await state.clear()
+        await message.answer("Изменение времени отменено.", reply_markup=get_main_keyboard())
+        return
+
+    data = await state.get_data()
+    rem_id = data.get("editing_rem_id")
+    if not rem_id:
+        await state.clear()
+        await message.answer("Ошибка: не указано напоминание.", reply_markup=get_main_keyboard())
+        return
+
+    parsed = parse_user_datetime(message.text)
+    if not parsed:
+        await message.answer(
+            "❌ Не удалось распознать дату и время.\n\n"
+            "Попробуйте еще раз в одном из форматов:\n"
+            "• `18:30`\n"
+            "• `25.11.2026 15:00`\n"
+            "• `+1 час` или `+30 мин`\n"
+            "• `завтра в 10:00`",
+            parse_mode="Markdown"
+        )
+        return
+
+    new_time, recur_minutes = parsed
+    user_id = message.from_user.id
+    updated = await update_reminder_datetime(
+        rem_id,
+        user_id,
+        new_time,
+        recur_minutes if recur_minutes > 0 else None
+    )
+    await state.clear()
+
+    if updated:
+        rem = await get_reminder_by_id(rem_id, user_id)
+        card_text = format_reminder_card_text(rem) if rem else ""
+        await message.answer(
+            f"✅ Время напоминания успешно обновлено!\n\n{card_text}",
+            reply_markup=get_reminder_detail_keyboard(rem_id),
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer("❌ Не удалось обновить напоминание (возможно, оно было удалено).", reply_markup=get_main_keyboard())
+
+
+@router.callback_query(F.data.startswith("rem:del:"))
+async def handle_rem_del_callback(callback: CallbackQuery, state: Optional[FSMContext] = None):
+    """Deletes reminder and updates list."""
+    if state is not None:
+        await state.clear()
+    user_id = callback.from_user.id
+    rem_id = int(callback.data.split(":")[2])
+    deleted = await delete_user_reminder(rem_id, user_id)
+    if deleted:
+        await callback.answer("🗑️ Напоминание удалено!", show_alert=False)
+    else:
+        await callback.answer("⚠️ Напоминание уже было удалено.", show_alert=True)
+
+    rems = await get_user_reminders(user_id)
+    text = format_reminders_list_text(rems)
+    kb = get_reminders_list_keyboard(rems)
+    if callback.message:
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        except TelegramBadRequest:
+            await callback.message.edit_text(text.replace("**", "").replace("*", "").replace("`", ""), reply_markup=kb)
+
+
+@router.callback_query(F.data == "rem:create")
+async def handle_rem_create_callback(callback: CallbackQuery, state: FSMContext):
+    """Initiates direct creation of a reminder."""
+    await callback.answer()
+    await state.set_state(ReminderManagementState.waiting_for_create_text)
+    if callback.message:
+        await callback.message.answer(
+            "➕ *Создание нового напоминания*\n\n"
+            "Введите текст напоминания (или текст вместе со временем, например: `Позвонить врачу завтра в 14:00`):",
+            parse_mode="Markdown",
+            reply_markup=get_cancel_keyboard()
+        )
+
+
+@router.message(ReminderManagementState.waiting_for_create_text, F.text)
+async def handle_create_reminder_text_input(message: Message, state: FSMContext):
+    """Handles text input for reminder creation; if time is present, creates immediately."""
+    if message.text in ALL_NAVIGATION_BUTTONS or is_bot_command(message.text):
+        await state.clear()
+        await message.answer("Создание напоминания отменено.", reply_markup=get_main_keyboard())
+        return
+
+    text = message.text.strip()
+    parsed = parse_user_datetime(text)
+    if parsed:
+        rem_time, recur = parsed
+        user_id = message.from_user.id
+        await add_reminder(user_id, text, rem_time, recur)
+        await state.clear()
+        rems = await get_user_reminders(user_id)
+        await message.answer(
+            f"✅ Напоминание создано на `{rem_time}`!",
+            reply_markup=get_main_keyboard(),
+            parse_mode="Markdown"
+        )
+        await message.answer(
+            format_reminders_list_text(rems),
+            reply_markup=get_reminders_list_keyboard(rems),
+            parse_mode="Markdown"
+        )
+        return
+
+    await state.update_data(create_text=text)
+    await state.set_state(ReminderManagementState.waiting_for_create_time)
+    await message.answer(
+        f"📝 Текст: *{text}*\n\n"
+        "🕒 Теперь укажите время напоминания (например: `18:00`, `завтра в 10:00`, `+1 час`, `25.11.2026 15:00`):",
+        parse_mode="Markdown",
+        reply_markup=get_cancel_keyboard()
+    )
+
+
+@router.message(ReminderManagementState.waiting_for_create_time, F.text)
+async def handle_create_reminder_time_input(message: Message, state: FSMContext):
+    """Handles time input for reminder creation."""
+    if message.text in ALL_NAVIGATION_BUTTONS or is_bot_command(message.text):
+        await state.clear()
+        await message.answer("Создание напоминания отменено.", reply_markup=get_main_keyboard())
+        return
+
+    data = await state.get_data()
+    create_text = data.get("create_text")
+    if not create_text:
+        await state.clear()
+        await message.answer("Ошибка: не указан текст напоминания.", reply_markup=get_main_keyboard())
+        return
+
+    parsed = parse_user_datetime(message.text)
+    if not parsed:
+        await message.answer(
+            "❌ Не удалось распознать время.\n\n"
+            "Попробуйте еще раз, например: `18:00`, `завтра в 10:00`, `+30 мин`, `25.11.2026 15:00`:",
+            parse_mode="Markdown"
+        )
+        return
+
+    rem_time, recur = parsed
+    user_id = message.from_user.id
+    await add_reminder(user_id, create_text, rem_time, recur)
+    await state.clear()
+
+    rems = await get_user_reminders(user_id)
+    await message.answer(
+        f"✅ Напоминание создано на `{rem_time}`!",
+        reply_markup=get_main_keyboard(),
+        parse_mode="Markdown"
+    )
+    await message.answer(
+        format_reminders_list_text(rems),
+        reply_markup=get_reminders_list_keyboard(rems),
+        parse_mode="Markdown"
+    )
+
+
+@router.callback_query(F.data.startswith("rem:done:"))
+async def handle_rem_done_notification_callback(callback: CallbackQuery):
+    """Marks a fired reminder as done and removes buttons."""
+    rem_id = int(callback.data.split(":")[2])
+    user_id = callback.from_user.id
+    await delete_user_reminder(rem_id, user_id)
+    await callback.answer("Отлично! Напоминание выполнено 👍")
+    if callback.message:
+        orig = callback.message.text or ""
+        clean_text = orig.replace("🔔 Напоминание:\n", "").replace("🔔 **Напоминание:**\n", "").strip()
+        try:
+            await callback.message.edit_text(f"✅ **Выполнено:**\n{clean_text}", reply_markup=None, parse_mode="Markdown")
+        except TelegramBadRequest:
+            await callback.message.edit_text(f"✅ Выполнено:\n{clean_text}", reply_markup=None)
+
+
+@router.callback_query(F.data.startswith("rem:snooze:"))
+async def handle_rem_snooze_notification_callback(callback: CallbackQuery):
+    """Snoozes a fired reminder by specified minutes (default 60)."""
+    parts = callback.data.split(":")
+    rem_id = int(parts[2])
+    minutes = int(parts[3]) if len(parts) > 3 else 60
+    user_id = callback.from_user.id
+
+    tz = get_current_timezone()
+    next_dt = datetime.datetime.now(tz) + datetime.timedelta(minutes=minutes)
+    next_time_str = next_dt.strftime("%Y-%m-%d %H:%M")
+    display_time = next_dt.strftime("%H:%M")
+
+    orig = callback.message.text if callback.message else ""
+    clean_text = orig.replace("🔔 Напоминание:\n", "").replace("🔔 **Напоминание:**\n", "").strip()
+    if not clean_text:
+        clean_text = f"Напоминание #{rem_id}"
+
+    await add_reminder(user_id, clean_text, next_time_str, recur_minutes=0)
+    await callback.answer(f"⏰ Отложено на {minutes} мин (до {display_time})")
+
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                f"⏰ **Отложено на {minutes} мин (до {display_time}):**\n{clean_text}",
+                reply_markup=None,
+                parse_mode="Markdown"
+            )
+        except TelegramBadRequest:
+            await callback.message.edit_text(
+                f"⏰ Отложено на {minutes} мин (до {display_time}):\n{clean_text}",
+                reply_markup=None
+            )
 
 
 

@@ -61,11 +61,12 @@ async def start(message: Message, state: Optional[FSMContext] = None):
         "👋 Бот для Obsidian запущен.\n"
         "Отправьте текст, фото, документ (.pdf, .docx, .txt, .md) или аудиосообщение.\n\n"
         "Быстрые команды:\n"
+        "• /reminders — управление напоминаниями (редактирование, удаление, добавление)\n"
+        "• /settings — настройки, статус системы и синхронизация S3\n"
         "• /daily — ежедневник (задачи и мысли на день)\n"
         "• /expenses — сводка расходов за день и месяц\n"
         "• /tags — каталог заметок по тегам\n"
         "• /sync — синхронизация с S3\n"
-        "• /status — статус бота и проверка связи с ИИ\n"
         "• /help — подробная справка",
         reply_markup=get_main_keyboard()
     )
@@ -88,10 +89,12 @@ async def main():
     try:
         from aiogram.types import BotCommand
         bot_commands = [
+            BotCommand(command="reminders", description="Управление напоминаниями"),
+            BotCommand(command="settings", description="Настройки и статус бота"),
+            BotCommand(command="sync", description="Синхронизация с S3"),
             BotCommand(command="daily", description="Добавить запись в ежедневник"),
             BotCommand(command="expenses", description="Сводка расходов за день и месяц"),
             BotCommand(command="tags", description="Обзор заметок по тегам"),
-            BotCommand(command="sync", description="Синхронизация с S3"),
             BotCommand(command="status", description="Статус бота и проверка связи с ИИ"),
             BotCommand(command="cancel", description="Отмена действия"),
             BotCommand(command="help", description="Справка по командам"),

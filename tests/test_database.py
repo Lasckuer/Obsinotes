@@ -39,6 +39,54 @@ async def test_reminders_crud(test_db: DatabaseManager):
     assert len(due_future) == 0
 
 @pytest.mark.asyncio
+async def test_user_reminders_management(test_db: DatabaseManager):
+    user_id = 999888
+    other_user = 123456
+
+    await test_db.add_reminder(user_id, "Напоминание 1", "2026-11-22 14:00", 0)
+    await test_db.add_reminder(user_id, "Напоминание 2", "2026-11-22 18:00", 30)
+    await test_db.add_reminder(other_user, "Чужое напоминание", "2026-11-22 15:00", 0)
+
+    # 1. Fetch user reminders
+    rems = await test_db.get_user_reminders(user_id)
+    assert len(rems) == 2
+    assert rems[0]["text"] == "Напоминание 1"
+    assert rems[1]["text"] == "Напоминание 2"
+    rem1_id = rems[0]["id"]
+    rem2_id = rems[1]["id"]
+
+    # 2. Get by ID
+    single = await test_db.get_reminder_by_id(rem1_id, user_id)
+    assert single is not None
+    assert single["text"] == "Напоминание 1"
+    # Ensure cannot get with wrong user
+    assert await test_db.get_reminder_by_id(rem1_id, other_user) is None
+
+    # 3. Update text
+    updated = await test_db.update_reminder_text(rem1_id, user_id, "Новый текст 1")
+    assert updated is True
+    check_single = await test_db.get_reminder_by_id(rem1_id, user_id)
+    assert check_single["text"] == "Новый текст 1"
+    # Cannot update for wrong user
+    assert await test_db.update_reminder_text(rem1_id, other_user, "Взлом") is False
+
+    # 4. Update datetime
+    updated_dt = await test_db.update_reminder_datetime(rem1_id, user_id, "2026-11-23 09:00", 15)
+    assert updated_dt is True
+    check_dt = await test_db.get_reminder_by_id(rem1_id, user_id)
+    assert check_dt["remind_time"] == "2026-11-23 09:00"
+    assert check_dt["recur_minutes"] == 15
+
+    # 5. Delete reminder
+    deleted = await test_db.delete_user_reminder(rem1_id, user_id)
+    assert deleted is True
+    rems_after = await test_db.get_user_reminders(user_id)
+    assert len(rems_after) == 1
+    assert rems_after[0]["id"] == rem2_id
+    # Cannot delete for wrong user
+    assert await test_db.delete_user_reminder(rem2_id, other_user) is False
+
+@pytest.mark.asyncio
 async def test_expenses(test_db: DatabaseManager):
     user_id = 111222
     await test_db.add_expense(user_id, 350.50, "Кофе и круассан")

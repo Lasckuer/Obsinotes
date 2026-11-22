@@ -13,24 +13,24 @@ from app.keyboards.inline import (
     get_delete_confirm_keyboard,
     get_tags_keyboard,
     get_status_keyboard,
-    get_daily_format_keyboard
+    get_daily_format_keyboard,
+    get_settings_menu_keyboard,
+    get_reminders_list_keyboard,
+    get_reminder_detail_keyboard,
+    get_reminder_notification_keyboard
 )
 
 def test_main_keyboard():
     kb = get_main_keyboard()
-    assert len(kb.keyboard) == 4
+    assert len(kb.keyboard) == 3
     # Row 1
     assert kb.keyboard[0][0].text == "📝 Новая заметка"
     assert kb.keyboard[0][1].text == "🔍 Поиск заметок"
     # Row 2
     assert kb.keyboard[1][0].text == "🤖 Спросить ИИ"
-    assert kb.keyboard[1][1].text == "🏷️ Каталог тегов"
+    assert kb.keyboard[1][1].text == "⏰ Напоминания"
     # Row 3
-    assert kb.keyboard[2][0].text == "📅 Ежедневник"
-    assert kb.keyboard[2][1].text == "💰 Расходы"
-    # Row 4
-    assert kb.keyboard[3][0].text == "🔄 Синхронизация S3"
-    assert kb.keyboard[3][1].text == "⚙️ Статус и справка"
+    assert kb.keyboard[2][0].text == "⚙️ Настройки"
 
 def test_navigation_constants():
     assert "📝 Новая заметка" in MAIN_MENU_BUTTONS
@@ -104,5 +104,39 @@ def test_inline_keyboards():
     assert "daily_fmt:note" in daily_cbs
     assert "daily_fmt:todo" in daily_cbs
     assert "daily_fmt:idea" in daily_cbs
+
+    # 7. Settings menu keyboard
+    settings_kb = get_settings_menu_keyboard()
+    settings_cbs = [b.callback_data for row in settings_kb.inline_keyboard for b in row]
+    assert "sync_now" in settings_cbs
+    assert "test_ai" in settings_cbs
+    assert "settings:status" in settings_cbs
+    assert "settings:help" in settings_cbs
+
+    # 8. Reminders list keyboard
+    reminders = [
+        {"id": 1, "text": "Купить хлеб", "remind_time": "2026-11-22 15:00"},
+        {"id": 2, "text": "Позвонить маме", "remind_time": "2026-11-22 19:00"}
+    ]
+    rems_kb = get_reminders_list_keyboard(reminders)
+    rem_cbs = [b.callback_data for row in rems_kb.inline_keyboard for b in row]
+    assert "rem:view:1" in rem_cbs
+    assert "rem:view:2" in rem_cbs
+    assert "rem:create" in rem_cbs
+    assert "rem:list" in rem_cbs
+
+    # 9. Reminder detail keyboard
+    detail_kb = get_reminder_detail_keyboard(1)
+    detail_cbs = [b.callback_data for row in detail_kb.inline_keyboard for b in row]
+    assert "rem:edit_text:1" in detail_cbs
+    assert "rem:edit_time:1" in detail_cbs
+    assert "rem:del:1" in detail_cbs
+    assert "rem:list" in detail_cbs
+
+    # 10. Reminder notification keyboard
+    notif_kb = get_reminder_notification_keyboard(1)
+    notif_cbs = [b.callback_data for row in notif_kb.inline_keyboard for b in row]
+    assert "rem:done:1" in notif_cbs
+    assert "rem:snooze:1:60" in notif_cbs
 
 

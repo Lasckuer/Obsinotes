@@ -337,6 +337,80 @@ class DatabaseManager:
         await conn.execute("UPDATE reminders SET remind_time = ? WHERE id = ?", (next_time, r_id))
         await conn.commit()
 
+    async def get_user_reminders(self, user_id: int) -> List[Dict[str, Any]]:
+        conn = await self.get_connection()
+        async with conn.execute(
+            "SELECT id, user_id, text, remind_time, recur_minutes FROM reminders WHERE user_id = ? ORDER BY remind_time ASC",
+            (user_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "user_id": row[1],
+                    "text": row[2],
+                    "remind_time": row[3],
+                    "recur_minutes": row[4]
+                }
+                for row in rows
+            ]
+
+    async def get_reminder_by_id(self, reminder_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        conn = await self.get_connection()
+        async with conn.execute(
+            "SELECT id, user_id, text, remind_time, recur_minutes FROM reminders WHERE id = ? AND user_id = ?",
+            (reminder_id, user_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "user_id": row[1],
+                "text": row[2],
+                "remind_time": row[3],
+                "recur_minutes": row[4]
+            }
+
+    async def update_reminder_text(self, reminder_id: int, user_id: int, new_text: str) -> bool:
+        conn = await self.get_connection()
+        cursor = await conn.execute(
+            "UPDATE reminders SET text = ? WHERE id = ? AND user_id = ?",
+            (new_text, reminder_id, user_id)
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+
+    async def update_reminder_datetime(
+        self,
+        reminder_id: int,
+        user_id: int,
+        new_time: str,
+        recur_minutes: Optional[int] = None
+    ) -> bool:
+        conn = await self.get_connection()
+        if recur_minutes is not None:
+            cursor = await conn.execute(
+                "UPDATE reminders SET remind_time = ?, recur_minutes = ? WHERE id = ? AND user_id = ?",
+                (new_time, recur_minutes, reminder_id, user_id)
+            )
+        else:
+            cursor = await conn.execute(
+                "UPDATE reminders SET remind_time = ? WHERE id = ? AND user_id = ?",
+                (new_time, reminder_id, user_id)
+            )
+        await conn.commit()
+        return cursor.rowcount > 0
+
+    async def delete_user_reminder(self, reminder_id: int, user_id: int) -> bool:
+        conn = await self.get_connection()
+        cursor = await conn.execute(
+            "DELETE FROM reminders WHERE id = ? AND user_id = ?",
+            (reminder_id, user_id)
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+
     async def add_expense(self, user_id: int, amount: float, comment: str):
         conn = await self.get_connection()
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -896,6 +970,26 @@ async def delete_reminder(reminder_id: int):
 
 async def update_reminder_time(r_id: int, next_time: str):
     await db_manager.update_reminder_time(r_id, next_time)
+
+async def get_user_reminders(user_id: int) -> List[Dict[str, Any]]:
+    return await db_manager.get_user_reminders(user_id)
+
+async def get_reminder_by_id(reminder_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+    return await db_manager.get_reminder_by_id(reminder_id, user_id)
+
+async def update_reminder_text(reminder_id: int, user_id: int, new_text: str) -> bool:
+    return await db_manager.update_reminder_text(reminder_id, user_id, new_text)
+
+async def update_reminder_datetime(
+    reminder_id: int,
+    user_id: int,
+    new_time: str,
+    recur_minutes: Optional[int] = None
+) -> bool:
+    return await db_manager.update_reminder_datetime(reminder_id, user_id, new_time, recur_minutes)
+
+async def delete_user_reminder(reminder_id: int, user_id: int) -> bool:
+    return await db_manager.delete_user_reminder(reminder_id, user_id)
 
 async def add_expense(user_id: int, amount: float, comment: str):
     await db_manager.add_expense(user_id, amount, comment)

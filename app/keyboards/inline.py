@@ -121,6 +121,63 @@ def get_status_keyboard() -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
+def get_settings_menu_keyboard() -> InlineKeyboardMarkup:
+    """Builds inline keyboard for the Settings & Hub menu."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔄 Синхронизация S3", callback_data="sync_now"),
+        InlineKeyboardButton(text="🧪 Тест связи с ИИ", callback_data="test_ai")
+    )
+    builder.row(
+        InlineKeyboardButton(text="📊 Статус системы", callback_data="settings:status"),
+        InlineKeyboardButton(text="ℹ️ Справка по командам", callback_data="settings:help")
+    )
+    return builder.as_markup()
+
+def get_reminders_list_keyboard(reminders: List[dict]) -> InlineKeyboardMarkup:
+    """Builds inline keyboard for the reminders list with individual selection and creation."""
+    builder = InlineKeyboardBuilder()
+    for idx, rem in enumerate(reminders, start=1):
+        rem_id = rem["id"]
+        raw_text = rem.get("text", "")
+        # Clean markdown/newlines for button label
+        clean_title = raw_text.replace("\n", " ").strip()
+        if len(clean_title) > 22:
+            clean_title = f"{clean_title[:20]}..."
+        btn_label = f"#{idx}. {clean_title}" if clean_title else f"Напоминание #{idx}"
+        builder.row(InlineKeyboardButton(text=btn_label, callback_data=f"rem:view:{rem_id}"))
+
+    action_row = [
+        InlineKeyboardButton(text="➕ Создать", callback_data="rem:create"),
+        InlineKeyboardButton(text="🔄 Обновить", callback_data="rem:list")
+    ]
+    builder.row(*action_row)
+    return builder.as_markup()
+
+def get_reminder_detail_keyboard(reminder_id: int) -> InlineKeyboardMarkup:
+    """Builds action buttons for a single reminder: edit text, edit time, delete, back."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✏️ Изменить текст", callback_data=f"rem:edit_text:{reminder_id}"),
+        InlineKeyboardButton(text="🕒 Изменить время", callback_data=f"rem:edit_time:{reminder_id}")
+    )
+    builder.row(
+        InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"rem:del:{reminder_id}")
+    )
+    builder.row(
+        InlineKeyboardButton(text="🔙 К списку напоминаний", callback_data="rem:list")
+    )
+    return builder.as_markup()
+
+def get_reminder_notification_keyboard(reminder_id: int) -> InlineKeyboardMarkup:
+    """Builds inline keyboard for a fired reminder notification: done or snooze."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Выполнено", callback_data=f"rem:done:{reminder_id}"),
+        InlineKeyboardButton(text="⏰ Отложить на 1 ч", callback_data=f"rem:snooze:{reminder_id}:60")
+    )
+    return builder.as_markup()
+
 def get_daily_format_keyboard() -> InlineKeyboardMarkup:
     """Builds inline keyboard for daily note quick entry formats."""
     builder = InlineKeyboardBuilder()

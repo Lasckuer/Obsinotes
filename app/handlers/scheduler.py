@@ -4,6 +4,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from app.config import get_settings
 from app.database.db import get_due_reminders, delete_reminder, get_today_notes, update_reminder_time
+from app.keyboards.inline import get_reminder_notification_keyboard
 from app.handlers import messages
 from logger import logger, log_reminder_sent, log_reminder_error, log_reminder_cycled
 
@@ -29,8 +30,9 @@ async def check_reminders(bot: Bot):
         sent = False
         try:
             safe_text = text if len(text) <= 4000 else f"{text[:3990]}..."
+            notif_kb = get_reminder_notification_keyboard(r_id)
             try:
-                await bot.send_message(user_id, f"🔔 **Напоминание:**\n{safe_text}", parse_mode="Markdown")
+                await bot.send_message(user_id, f"🔔 **Напоминание:**\n{safe_text}", parse_mode="Markdown", reply_markup=notif_kb)
                 sent = True
             except TelegramBadRequest as tb_err:
                 tb_msg = str(tb_err).lower()
@@ -41,7 +43,7 @@ async def check_reminders(bot: Bot):
 
                 logger.warning(f"Ошибка форматирования Markdown для напоминания {r_id}: {tb_err}. Отправка без разметки...")
                 try:
-                    await bot.send_message(user_id, f"🔔 Напоминание:\n{safe_text}", parse_mode=None)
+                    await bot.send_message(user_id, f"🔔 Напоминание:\n{safe_text}", parse_mode=None, reply_markup=notif_kb)
                     sent = True
                 except TelegramBadRequest as tb_err2:
                     logger.error(f"Не удалось отправить напоминание {r_id} даже без разметки: {tb_err2}. Удаляем напоминание во избежание бесконечного цикла.")
